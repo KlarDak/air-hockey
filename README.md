@@ -2,6 +2,8 @@
 
 A fast neon browser air hockey game with a computer opponent and direct peer-to-peer multiplayer over WebRTC.
 
+Test the game here: wwbt-blog.ru/sandbox/air-hockey/
+
 ## Multiplayer
 
 Challenge a friend in a direct online match without registration or accounts. One player creates a room and shares its six-character code; the second player enters the code, and the game establishes a peer-to-peer WebRTC connection between their browsers.
