@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#060817">
+  <meta name="description" content="Fast neon air hockey. First to seven wins.">
+  <title>Air Hockey</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="/dist/air-hockey.js"></script>
+</head>
+<body>
+  <main class="game-shell">
+    <header class="brand">
+      <div><span class="eyebrow">NEON LEAGUE / 01</span><h1>Air Hockey</h1></div>
+      <div class="score" aria-label="Score"><b id="player-score">0</b><span>:</span><b id="ai-score">0</b></div>
+    </header>
+
+    <section class="stage" aria-label="Air hockey game">
+      <canvas id="game" width="720" height="1120" aria-label="Move the mint striker with your pointer"></canvas>
+
+      <div class="overlay" id="setup">
+        <div class="card">
+          <span class="eyebrow">MATCH SETUP</span>
+          <h2>Choose your rival</h2>
+          <div class="options" role="group" aria-label="Difficulty">
+            <button type="button" data-level="rookie"><small>01</small> Rookie</button>
+            <button type="button" class="active" data-level="pro"><small>02</small> Pro</button>
+            <button type="button" data-level="legend"><small>03</small> Legend</button>
+          </div>
+          <button class="primary" id="start" type="button">Drop the puck</button>
+          <button class="online-button" id="online" type="button">Play peer-to-peer</button>
+          <p>First to 7 wins</p>
+        </div>
+      </div>
+
+      <div class="overlay" id="network" hidden>
+        <div class="card network-card">
+          <span class="eyebrow">PEER-TO-PEER / WEBRTC</span>
+          <h2>Direct match</h2>
+          <div class="network-roles">
+            <button type="button" data-role="host">Create match</button>
+            <button type="button" data-role="guest">Join match</button>
+          </div>
+          <p class="network-status" id="network-status">Choose who creates the match</p>
+          <div class="room-controls" id="room-controls" hidden>
+            <label class="code-label" for="room-code">Six-character room code</label>
+            <input id="room-code" maxlength="6" autocomplete="off" spellcheck="false" placeholder="ABC123">
+            <button class="primary" id="apply-code" type="button" hidden>Join room</button>
+            <button class="copy-button" id="copy-code" type="button" hidden>Copy room code</button>
+          </div>
+          <button class="text-button" id="network-back" type="button">Back</button>
+        </div>
+      </div>
+
+      <div class="overlay compact" id="message" hidden>
+        <div class="card">
+          <span class="eyebrow" id="message-label">TIME OUT</span>
+          <h2 id="message-title">Paused</h2>
+          <button class="primary" id="resume" type="button">Back to ice</button>
+          <button class="text-button" id="menu" type="button" hidden>Change rival</button>
+        </div>
+      </div>
+
+      <div class="controls" id="controls" hidden>
+        <button id="pause" type="button">Pause</button>
+        <button id="restart" type="button">Restart</button>
+        <button id="solo-menu" type="button">Menu</button>
+      </div>
+    </section>
+    <p class="hint">Drag the mint striker · first to 7 · space to pause</p>
+  </main>
+</body>
+</html>
