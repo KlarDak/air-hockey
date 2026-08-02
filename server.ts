@@ -3,7 +3,7 @@ import { networkInterfaces } from "node:os";
 import { extname, join, normalize } from "node:path";
 import { readFile, stat } from "node:fs/promises";
 
-const host = "0.0.0.0";
+const host = process.env.HOST ?? "0.0.0.0";
 const port = Number(process.env.PORT ?? 5173);
 const root = process.cwd();
 type Room = { offer: RTCSessionDescriptionInit; answer?: RTCSessionDescriptionInit; createdAt: number };

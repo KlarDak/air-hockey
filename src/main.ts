@@ -2,7 +2,7 @@ import { SoundSystem } from "./audio";
 import { Game } from "./game";
 import { NetworkManager } from "./network";
 import { ui } from "./ui";
-import type { Difficulty } from "./types";
+import type { Difficulty, GameMode } from "./types";
 
 const sound = new SoundSystem();
 const game = new Game(sound);
@@ -12,6 +12,12 @@ document.querySelectorAll<HTMLButtonElement>("[data-level]").forEach(button => b
   document.querySelector("[data-level].active")?.classList.remove("active");
   button.classList.add("active");
   game.setDifficulty(button.dataset.level as Difficulty);
+}));
+
+document.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach(button => button.addEventListener("click", () => {
+  document.querySelector("[data-mode].active")?.classList.remove("active");
+  button.classList.add("active");
+  game.setMode(button.dataset.mode as GameMode);
 }));
 
 document.querySelector("#start")!.addEventListener("click", () => { game.setRole("solo"); game.start(); });

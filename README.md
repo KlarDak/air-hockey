@@ -2,7 +2,7 @@
 
 A fast neon browser air hockey game with a computer opponent and direct peer-to-peer multiplayer over WebRTC.
 
-Test the game here: wwbt-blog.ru/sandbox/air-hockey/
+Test the game here: [https://wwbt-blog.ru/sandbox/air-hockey/](https://wwbt-blog.ru/sandbox/air-hockey/).
 
 ## Multiplayer
 
@@ -41,6 +41,12 @@ npm run dev
 ## Mechanics
 
 - Move the mint striker with a mouse, pen, or touch input;
+- Choose between classic 1 VS 1 and a shared-field 3 VS 3 team mode;
+- In 3 VS 3, every striker can cross the center line and play anywhere on the shared field;
+- The player acts as the forward, supported by an AI goalkeeper and midfielder;
+- The player striker is blue in 3 VS 3, while AI teammates remain mint for quick identification;
+- The opposing team uses its own goalkeeper, midfielder, and forward roles;
+- Allied bots look for passes toward the player instead of simply chasing the puck together;
 - The first player to score seven goals wins;
 - Rookie, Pro, and Legend computer difficulty levels are available;
 - The puck reacts to striker velocity and loses speed gradually;
@@ -53,6 +59,8 @@ npm run dev
 ## Direct Match
 
 Direct Match connects two browsers through a WebRTC DataChannel:
+
+Direct Match uses the classic 1 VS 1 ruleset. The multiplayer control is disabled while 3 VS 3 is selected, because the team mode is currently available only in single-player.
 
 1. One player selects **Create match** and copies the six-character room code.
 2. The other player selects **Join match** and enters that code.
@@ -79,6 +87,39 @@ The source is split into focused TypeScript modules:
 - `main.ts` — application wiring and event handlers.
 
 Despite the module structure, esbuild bundles the browser code into a single `dist/air-hockey.js` file. The server is built separately as `dist/server.js`.
+
+## Deploying on a VPS
+
+Multiplayer requires the Node.js server: uploading only the static files is not enough because `server.ts` provides the temporary room API used to exchange WebRTC connection data.
+
+The production templates in `deploy/` assume that the project is uploaded to `/var/www/air-hockey`, Node.js listens on `127.0.0.1:5174`, and Nginx exposes it at `https://wwbt-blog.ru/sandbox/air-hockey/`.
+
+```bash
+cd /var/www/air-hockey
+npm ci
+npm run build
+
+sudo cp deploy/air-hockey.service /etc/systemd/system/air-hockey.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now air-hockey
+```
+
+Copy the two `location` blocks from `deploy/nginx-air-hockey.conf` into the existing HTTPS `server` block for the domain, then validate and reload Nginx:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Verify the room API:
+
+```bash
+curl -i -X POST https://wwbt-blog.ru/sandbox/air-hockey/api/rooms \
+  -H 'Content-Type: application/json' \
+  --data '{"offer":{"type":"offer","sdp":"test"}}'
+```
+
+The response should have status `201` and contain a six-character room code.
 
 ## Using the Game in Another Project
 

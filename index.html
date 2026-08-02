@@ -13,7 +13,7 @@
 <body>
   <main class="game-shell">
     <header class="brand">
-      <div><span class="eyebrow">NEON LEAGUE / 01</span><h1>Air Hockey</h1></div>
+      <div><span class="eyebrow" id="league-label">NEON LEAGUE / 01</span><h1>Air Hockey</h1></div>
       <div class="score" aria-label="Score"><b id="player-score">0</b><span>:</span><b id="ai-score">0</b></div>
     </header>
 
@@ -24,6 +24,10 @@
         <div class="card">
           <span class="eyebrow">MATCH SETUP</span>
           <h2>Choose your rival</h2>
+          <div class="mode-options" role="group" aria-label="Game mode">
+            <button type="button" class="active" data-mode="duel">1 VS 1</button>
+            <button type="button" data-mode="three">3 VS 3</button>
+          </div>
           <div class="options" role="group" aria-label="Difficulty">
             <button type="button" data-level="rookie"><small>01</small> Rookie</button>
             <button type="button" class="active" data-level="pro"><small>02</small> Pro</button>

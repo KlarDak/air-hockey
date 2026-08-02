@@ -3,6 +3,8 @@ import { SoundSystem } from "./audio";
 import { ui } from "./ui";
 import type { NetworkRole, PeerMessage, Snapshot, SoundKind } from "./types";
 
+const roomApi = new URL("api/rooms", document.baseURI).toString();
+
 export class NetworkManager {
   private peer: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
@@ -20,6 +22,7 @@ export class NetworkManager {
   }
 
   openMenu(): void {
+    if (this.game.mode === "three") return;
     this.close();
     this.game.setRole("solo");
     document.querySelector("[data-role].active")?.classList.remove("active");
@@ -33,6 +36,7 @@ export class NetworkManager {
   back(): void { this.close(); this.game.setRole("solo"); this.game.setState("setup"); }
 
   async chooseRole(role: Exclude<NetworkRole, "solo">): Promise<void> {
+    if (this.game.mode === "three") throw new Error("Direct Match supports 1 VS 1 only");
     this.game.setRole(role);
     this.game.sound.ensure();
     document.querySelector("[data-role].active")?.classList.remove("active");
@@ -61,13 +65,13 @@ export class NetworkManager {
     ui.applyCode.disabled = true;
     try {
       ui.networkStatus.textContent = "Finding room…";
-      const response = await fetch(`/api/rooms/${code}`);
+      const response = await fetch(`${roomApi}/${encodeURIComponent(code)}`);
       if (!response.ok) throw new Error("Room not found");
       const room = await response.json() as { offer: RTCSessionDescriptionInit };
       await this.peer.setRemoteDescription(room.offer);
       await this.peer.setLocalDescription(await this.peer.createAnswer());
       await this.waitForIce(this.peer);
-      const answerResponse = await fetch(`/api/rooms/${code}/answer`, {
+      const answerResponse = await fetch(`${roomApi}/${encodeURIComponent(code)}/answer`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ answer: this.peer.localDescription }),
       });
@@ -98,7 +102,7 @@ export class NetworkManager {
     this.bindChannel(connection.createDataChannel("air-hockey", { ordered: false, maxRetransmits: 0 }));
     await connection.setLocalDescription(await connection.createOffer());
     await this.waitForIce(connection);
-    const response = await fetch("/api/rooms", {
+    const response = await fetch(roomApi, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ offer: connection.localDescription }),
     });
@@ -109,7 +113,7 @@ export class NetworkManager {
     ui.networkStatus.textContent = "Send this code to player 2. Waiting for connection…";
     this.roomPoll = window.setInterval(async () => {
       if (!this.peer || this.peer.remoteDescription) return;
-      const check = await fetch(`/api/rooms/${data.code}`);
+      const check = await fetch(`${roomApi}/${encodeURIComponent(data.code)}`);
       if (!check.ok) return;
       const room = await check.json() as { answer: RTCSessionDescriptionInit | null };
       if (room.answer) {

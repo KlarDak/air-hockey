@@ -2,6 +2,8 @@ const get = <T extends Element>(selector: string) => document.querySelector<T>(s
 
 export const ui = {
   canvas: get<HTMLCanvasElement>("#game"),
+  leagueLabel: get<HTMLElement>("#league-label"),
+  onlineButton: get<HTMLButtonElement>("#online"),
   setup: get<HTMLElement>("#setup"),
   message: get<HTMLElement>("#message"),
   controls: get<HTMLElement>("#controls"),

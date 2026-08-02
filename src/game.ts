@@ -1,15 +1,18 @@
 import { GOAL, H, MALLET_R, PUCK_R, W, clamp, reducedEffects, renderScale } from "./config";
 import { SoundSystem } from "./audio";
 import { ui } from "./ui";
-import type { Difficulty, Disc, GameState, NetworkRole, Particle, Puck, Snapshot } from "./types";
+import type { Difficulty, Disc, GameMode, GameState, NetworkRole, Particle, Puck, Snapshot } from "./types";
 
 export class Game {
   state: GameState = "setup";
   role: NetworkRole = "solo";
   difficulty: Difficulty = "pro";
+  mode: GameMode = "duel";
   score: [number, number] = [0, 0];
   player: Disc = this.disc(W / 2, H - 185);
   opponent: Disc = this.disc(W / 2, 185);
+  alliedBots: Disc[] = [this.disc(W / 2, H - 135), this.disc(W * .68, H * .64)];
+  enemyBots: Disc[] = [this.opponent, this.disc(W * .32, H * .36), this.disc(W * .68, H * .48)];
   puck: Puck = { x: W / 2, y: H / 2, vx: 3, vy: -7 };
   onGuestInput: ((x: number, y: number) => void) | null = null;
   onHostSnapshot: ((snapshot: Omit<Snapshot, "type" | "seq">) => void) | null = null;
@@ -27,7 +30,7 @@ export class Game {
   private lastGuestInputAt = 0;
   private jamFrames = 0;
   private releaseFrames = 0;
-  private releasedMallet: "player" | "ai" | null = null;
+  private releasedMallet: Disc | null = null;
   private aiRetreatFrames = 0;
   private aiCornerCooldown = 0;
 
@@ -54,6 +57,13 @@ export class Game {
 
   setRole(role: NetworkRole): void { this.role = role; this.updateScore(); }
   setDifficulty(value: Difficulty): void { this.difficulty = value; }
+  setMode(value: GameMode): void {
+    this.mode = value;
+    const teamMode = value === "three";
+    ui.leagueLabel.textContent = teamMode ? "TEAM LEAGUE / 02" : "NEON LEAGUE / 01";
+    ui.onlineButton.disabled = teamMode;
+    ui.onlineButton.textContent = teamMode ? "Direct match · 1 VS 1 only" : "Play peer-to-peer";
+  }
 
   start(): void {
     this.sound.ensure();
@@ -70,6 +80,8 @@ export class Game {
     this.puck = { x: W / 2, y: H / 2, vx: (Math.random() - .5) * 5, vy: (towardPlayer ? 1 : -1) * (6.5 + Math.random() * 2) };
     this.player = this.disc(W / 2, H - 185);
     this.opponent = this.disc(W / 2, 185);
+    this.alliedBots = [this.disc(W / 2, H - 135), this.disc(W * .68, H * .64)];
+    this.enemyBots = [this.opponent, this.disc(W * .32, H * .36), this.disc(W * .68, H * .48)];
     this.jamFrames = this.releaseFrames = this.aiRetreatFrames = this.aiCornerCooldown = 0;
     this.releasedMallet = null;
   }
@@ -106,7 +118,8 @@ export class Game {
     if (this.state !== "playing") return;
     const rect = ui.canvas.getBoundingClientRect();
     const x = clamp((event.clientX - rect.left) / rect.width * W, MALLET_R + 18, W - MALLET_R - 18);
-    const y = clamp((event.clientY - rect.top) / rect.height * H, H / 2 + MALLET_R + 12, H - MALLET_R - 22);
+    const minY = this.mode === "three" && this.role === "solo" ? MALLET_R + 24 : H / 2 + MALLET_R + 12;
+    const y = clamp((event.clientY - rect.top) / rect.height * H, minY, H - MALLET_R - 22);
     if (this.role === "guest") {
       this.opponent.x = W - x;
       this.opponent.y = H - y;
@@ -174,6 +187,13 @@ export class Game {
     this.puck.vx += mvx * .55; this.puck.vy += mvy * .55;
     const speed = Math.hypot(this.puck.vx, this.puck.vy);
     if (speed > 22) { this.puck.vx *= 22 / speed; this.puck.vy *= 22 / speed; }
+    if (this.mode === "three" && this.role === "solo" && this.alliedBots.includes(mallet)) {
+      const passX = this.player.x - this.puck.x;
+      const passY = this.player.y - this.puck.y;
+      const passDistance = Math.hypot(passX, passY) || 1;
+      this.puck.vx = this.puck.vx * .22 + passX / passDistance * 12.5;
+      this.puck.vy = this.puck.vy * .22 + passY / passDistance * 12.5;
+    }
     this.sound.play("mallet");
   }
 
@@ -184,12 +204,21 @@ export class Game {
     const targetX = this.puck.y < H * .64 ? this.puck.x + (side ? 0 : this.puck.vx * 8) : W / 2;
     const gap = slow ? 64 : side ? 74 : 85;
     const targetY = this.puck.y < H / 2 ? clamp(this.puck.y - gap, 95, H / 2 - 75) : 185;
-    if (this.role === "solo") this.updateAi(dt, tracking, maxSpeed, targetX, targetY);
+    if (this.role === "solo") {
+      if (this.mode === "three") this.updateTeams(dt, tracking, maxSpeed);
+      else this.updateAi(dt, tracking, maxSpeed, targetX, targetY);
+    }
 
     this.puck.x += this.puck.vx * dt; this.puck.y += this.puck.vy * dt;
     this.puck.vx *= Math.pow(.9992, dt); this.puck.vy *= Math.pow(.9992, dt);
-    if (!(this.releaseFrames > 0 && this.releasedMallet === "player")) this.hitMallet(this.player);
-    if (!(this.releaseFrames > 0 && this.releasedMallet === "ai") && this.aiRetreatFrames <= 0) this.hitMallet(this.opponent);
+    const activeMallets = this.mode === "three" && this.role === "solo"
+      ? [this.player, ...this.alliedBots, ...this.enemyBots]
+      : [this.player, this.opponent];
+    for (const mallet of activeMallets) {
+      if (this.releaseFrames > 0 && this.releasedMallet === mallet) continue;
+      if (mallet === this.opponent && this.aiRetreatFrames > 0) continue;
+      this.hitMallet(mallet);
+    }
     this.resolveRails();
     this.resolveJam(dt);
     if (this.releaseFrames > 0) { this.releaseFrames = Math.max(0, this.releaseFrames - dt); if (!this.releaseFrames) this.releasedMallet = null; }
@@ -199,11 +228,12 @@ export class Game {
     if (this.puck.y > H + PUCK_R * 1.5) this.goal(false);
     this.player.px = this.player.x; this.player.py = this.player.y;
     this.opponent.px = this.opponent.x; this.opponent.py = this.opponent.y;
+    for (const bot of [...this.alliedBots, ...this.enemyBots]) { bot.px = bot.x; bot.py = bot.y; }
   }
 
   private updateAi(dt: number, tracking: number, maxSpeed: number, targetX: number, targetY: number): void {
     const cornerRetreat = this.aiRetreatFrames > 0;
-    const jamRetreat = this.releaseFrames > 0 && this.releasedMallet === "ai";
+    const jamRetreat = this.releaseFrames > 0 && this.releasedMallet === this.opponent;
     const x = cornerRetreat ? (this.puck.x < W / 2 ? 190 : W - 190) : jamRetreat ? W / 2 : targetX;
     const y = cornerRetreat ? 220 : jamRetreat ? 205 : targetY;
     const factor = cornerRetreat || jamRetreat ? .18 : tracking;
@@ -222,6 +252,67 @@ export class Game {
     }
   }
 
+  private updateTeams(dt: number, tracking: number, maxSpeed: number): void {
+    const move = (bot: Disc, targetX: number, targetY: number, speedScale = 1): void => {
+      const speed = maxSpeed * speedScale;
+      const factor = tracking * (speedScale > 1 ? 1.15 : 1);
+      bot.x += clamp((targetX - bot.x) * factor * dt, -speed * dt, speed * dt);
+      bot.y += clamp((targetY - bot.y) * factor * dt, -speed * dt, speed * dt);
+      bot.x = clamp(bot.x, MALLET_R + 18, W - MALLET_R - 18);
+    };
+
+    const [enemyKeeper, enemyMidfielder, enemyAttacker] = this.enemyBots;
+    const enemyDanger = this.puck.y < H * .32;
+    move(enemyKeeper, clamp(this.puck.x, W / 2 - GOAL * .55, W / 2 + GOAL * .55), enemyDanger ? this.puck.y + 78 : 135, .9);
+    move(enemyMidfielder, this.puck.y < H * .78 ? this.puck.x : W * .35, this.puck.y < H * .78 ? this.puck.y - 82 : H * .37, .96);
+    move(enemyAttacker, this.puck.x, this.puck.y - 70, 1.12);
+
+    const [allyKeeper, allyMidfielder] = this.alliedBots;
+    const allyDanger = this.puck.y > H * .68;
+    move(allyKeeper, clamp(this.puck.x, W / 2 - GOAL * .55, W / 2 + GOAL * .55), allyDanger ? this.puck.y + 78 : H - 135, .88);
+    const supportX = this.puck.x * .72 + this.player.x * .28;
+    const supportY = this.puck.y + Math.sign(this.player.y - this.puck.y || 1) * 82;
+    move(allyMidfielder, supportX, supportY, 1.02);
+
+    for (const bot of [...this.enemyBots, ...this.alliedBots]) {
+      bot.y = clamp(bot.y, MALLET_R + 24, H - MALLET_R - 22);
+    }
+    this.separateTeam(this.enemyBots, MALLET_R + 24, H - MALLET_R - 22);
+    this.separateTeam(this.alliedBots, MALLET_R + 24, H - MALLET_R - 22);
+    for (const bot of this.alliedBots) this.pushBotAwayFromPlayer(bot);
+  }
+
+  private pushBotAwayFromPlayer(bot: Disc): void {
+    let dx = bot.x - this.player.x, dy = bot.y - this.player.y;
+    let distance = Math.hypot(dx, dy);
+    const minimum = MALLET_R * 2 + 14;
+    if (distance >= minimum) return;
+    if (!distance) { dx = 1; dy = 0; distance = 1; }
+    const push = minimum - distance;
+    bot.x = clamp(bot.x + dx / distance * push, MALLET_R + 18, W - MALLET_R - 18);
+    bot.y = clamp(bot.y + dy / distance * push, MALLET_R + 24, H - MALLET_R - 22);
+  }
+
+  private separateTeam(team: Disc[], minY: number, maxY: number): void {
+    const minimum = MALLET_R * 2 + 14;
+    for (let i = 0; i < team.length; i++) {
+      for (let j = i + 1; j < team.length; j++) {
+        const a = team[i], b = team[j];
+        let dx = b.x - a.x, dy = b.y - a.y;
+        let distance = Math.hypot(dx, dy);
+        if (distance >= minimum) continue;
+        if (!distance) { dx = 1; dy = 0; distance = 1; }
+        const push = (minimum - distance) / 2;
+        const nx = dx / distance, ny = dy / distance;
+        a.x -= nx * push; a.y -= ny * push;
+        b.x += nx * push; b.y += ny * push;
+        a.x = clamp(a.x, MALLET_R + 18, W - MALLET_R - 18);
+        b.x = clamp(b.x, MALLET_R + 18, W - MALLET_R - 18);
+        a.y = clamp(a.y, minY, maxY); b.y = clamp(b.y, minY, maxY);
+      }
+    }
+  }
+
   private resolveRails(): void {
     if (this.puck.x < PUCK_R + 18) { this.puck.x = PUCK_R + 18; this.puck.vx = Math.abs(this.puck.vx); this.sound.play("rail"); }
     if (this.puck.x > W - PUCK_R - 18) { this.puck.x = W - PUCK_R - 18; this.puck.vx = -Math.abs(this.puck.vx); this.sound.play("rail"); }
@@ -233,12 +324,16 @@ export class Game {
   private resolveJam(dt: number): void {
     const left = this.puck.x < PUCK_R + 60, right = this.puck.x > W - PUCK_R - 60;
     const top = this.puck.y < PUCK_R + 60, bottom = this.puck.y > H - PUCK_R - 60;
-    const aiDistance = Math.hypot(this.puck.x - this.opponent.x, this.puck.y - this.opponent.y);
-    const playerDistance = Math.hypot(this.puck.x - this.player.x, this.puck.y - this.player.y);
-    const touching = Math.min(aiDistance, playerDistance) < PUCK_R + MALLET_R + 10;
+    const mallets = this.mode === "three" && this.role === "solo"
+      ? [this.player, ...this.alliedBots, ...this.enemyBots]
+      : [this.player, this.opponent];
+    const closest = mallets.reduce((best, mallet) =>
+      Math.hypot(this.puck.x - mallet.x, this.puck.y - mallet.y) < Math.hypot(this.puck.x - best.x, this.puck.y - best.y) ? mallet : best);
+    const closestDistance = Math.hypot(this.puck.x - closest.x, this.puck.y - closest.y);
+    const touching = closestDistance < PUCK_R + MALLET_R + 10;
     this.jamFrames = this.releaseFrames > 0 ? 0 : (left || right || top || bottom) && touching ? this.jamFrames + dt : 0;
     if (this.jamFrames <= 20) return;
-    this.releasedMallet = aiDistance < playerDistance ? "ai" : "player";
+    this.releasedMallet = closest;
     this.releaseFrames = 20;
     if (left) { this.puck.x = PUCK_R + 26; this.puck.vx = Math.max(10, Math.abs(this.puck.vx)); }
     if (right) { this.puck.x = W - PUCK_R - 26; this.puck.vx = -Math.max(10, Math.abs(this.puck.vx)); }
@@ -288,8 +383,12 @@ export class Game {
     this.ctx.drawImage(this.board, 0, 0, W, H);
     const flip = this.role === "guest";
     const view = (disc: Disc) => flip ? { ...disc, x: W - disc.x, y: H - disc.y } : disc;
-    this.drawMallet(view(this.player), flip ? "#ff4d7d" : "#58f6d0");
-    this.drawMallet(view(this.opponent), flip ? "#58f6d0" : "#ff4d7d");
+    const playerColor = this.mode === "three" && this.role === "solo" ? "#5f82ff" : flip ? "#ff4d7d" : "#58f6d0";
+    this.drawMallet(view(this.player), playerColor);
+    if (this.mode === "three" && this.role === "solo") {
+      for (const bot of this.alliedBots) this.drawMallet(view(bot), "#58f6d0");
+      for (const bot of this.enemyBots) this.drawMallet(view(bot), "#ff4d7d");
+    } else this.drawMallet(view(this.opponent), flip ? "#58f6d0" : "#ff4d7d");
     const x = flip ? W - this.puck.x : this.puck.x, y = flip ? H - this.puck.y : this.puck.y;
     this.ctx.save(); this.ctx.shadowBlur = reducedEffects ? 0 : 30; this.ctx.shadowColor = "#eff5ff"; this.ctx.fillStyle = "#eff5ff";
     this.ctx.beginPath(); this.ctx.arc(x, y, PUCK_R, 0, Math.PI * 2); this.ctx.fill(); this.ctx.restore();

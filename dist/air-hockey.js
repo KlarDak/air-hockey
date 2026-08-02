@@ -45,6 +45,8 @@
   var get = (selector) => document.querySelector(selector);
   var ui = {
     canvas: get("#game"),
+    leagueLabel: get("#league-label"),
+    onlineButton: get("#online"),
     setup: get("#setup"),
     message: get("#message"),
     controls: get("#controls"),
@@ -78,9 +80,12 @@
     state = "setup";
     role = "solo";
     difficulty = "pro";
+    mode = "duel";
     score = [0, 0];
     player = this.disc(W / 2, H - 185);
     opponent = this.disc(W / 2, 185);
+    alliedBots = [this.disc(W / 2, H - 135), this.disc(W * 0.68, H * 0.64)];
+    enemyBots = [this.opponent, this.disc(W * 0.32, H * 0.36), this.disc(W * 0.68, H * 0.48)];
     puck = { x: W / 2, y: H / 2, vx: 3, vy: -7 };
     onGuestInput = null;
     onHostSnapshot = null;
@@ -118,6 +123,13 @@
     setDifficulty(value) {
       this.difficulty = value;
     }
+    setMode(value) {
+      this.mode = value;
+      const teamMode = value === "three";
+      ui.leagueLabel.textContent = teamMode ? "TEAM LEAGUE / 02" : "NEON LEAGUE / 01";
+      ui.onlineButton.disabled = teamMode;
+      ui.onlineButton.textContent = teamMode ? "Direct match \xB7 1 VS 1 only" : "Play peer-to-peer";
+    }
     start() {
       this.sound.ensure();
       this.score = [0, 0];
@@ -132,6 +144,8 @@
       this.puck = { x: W / 2, y: H / 2, vx: (Math.random() - 0.5) * 5, vy: (towardPlayer ? 1 : -1) * (6.5 + Math.random() * 2) };
       this.player = this.disc(W / 2, H - 185);
       this.opponent = this.disc(W / 2, 185);
+      this.alliedBots = [this.disc(W / 2, H - 135), this.disc(W * 0.68, H * 0.64)];
+      this.enemyBots = [this.opponent, this.disc(W * 0.32, H * 0.36), this.disc(W * 0.68, H * 0.48)];
       this.jamFrames = this.releaseFrames = this.aiRetreatFrames = this.aiCornerCooldown = 0;
       this.releasedMallet = null;
     }
@@ -165,7 +179,8 @@
       if (this.state !== "playing") return;
       const rect = ui.canvas.getBoundingClientRect();
       const x = clamp((event.clientX - rect.left) / rect.width * W, MALLET_R + 18, W - MALLET_R - 18);
-      const y = clamp((event.clientY - rect.top) / rect.height * H, H / 2 + MALLET_R + 12, H - MALLET_R - 22);
+      const minY = this.mode === "three" && this.role === "solo" ? MALLET_R + 24 : H / 2 + MALLET_R + 12;
+      const y = clamp((event.clientY - rect.top) / rect.height * H, minY, H - MALLET_R - 22);
       if (this.role === "guest") {
         this.opponent.x = W - x;
         this.opponent.y = H - y;
@@ -243,6 +258,13 @@
         this.puck.vx *= 22 / speed;
         this.puck.vy *= 22 / speed;
       }
+      if (this.mode === "three" && this.role === "solo" && this.alliedBots.includes(mallet)) {
+        const passX = this.player.x - this.puck.x;
+        const passY = this.player.y - this.puck.y;
+        const passDistance = Math.hypot(passX, passY) || 1;
+        this.puck.vx = this.puck.vx * 0.22 + passX / passDistance * 12.5;
+        this.puck.vy = this.puck.vy * 0.22 + passY / passDistance * 12.5;
+      }
       this.sound.play("mallet");
     }
     update(dt) {
@@ -252,13 +274,20 @@
       const targetX = this.puck.y < H * 0.64 ? this.puck.x + (side ? 0 : this.puck.vx * 8) : W / 2;
       const gap = slow ? 64 : side ? 74 : 85;
       const targetY = this.puck.y < H / 2 ? clamp(this.puck.y - gap, 95, H / 2 - 75) : 185;
-      if (this.role === "solo") this.updateAi(dt, tracking, maxSpeed, targetX, targetY);
+      if (this.role === "solo") {
+        if (this.mode === "three") this.updateTeams(dt, tracking, maxSpeed);
+        else this.updateAi(dt, tracking, maxSpeed, targetX, targetY);
+      }
       this.puck.x += this.puck.vx * dt;
       this.puck.y += this.puck.vy * dt;
       this.puck.vx *= Math.pow(0.9992, dt);
       this.puck.vy *= Math.pow(0.9992, dt);
-      if (!(this.releaseFrames > 0 && this.releasedMallet === "player")) this.hitMallet(this.player);
-      if (!(this.releaseFrames > 0 && this.releasedMallet === "ai") && this.aiRetreatFrames <= 0) this.hitMallet(this.opponent);
+      const activeMallets = this.mode === "three" && this.role === "solo" ? [this.player, ...this.alliedBots, ...this.enemyBots] : [this.player, this.opponent];
+      for (const mallet of activeMallets) {
+        if (this.releaseFrames > 0 && this.releasedMallet === mallet) continue;
+        if (mallet === this.opponent && this.aiRetreatFrames > 0) continue;
+        this.hitMallet(mallet);
+      }
       this.resolveRails();
       this.resolveJam(dt);
       if (this.releaseFrames > 0) {
@@ -273,10 +302,14 @@
       this.player.py = this.player.y;
       this.opponent.px = this.opponent.x;
       this.opponent.py = this.opponent.y;
+      for (const bot of [...this.alliedBots, ...this.enemyBots]) {
+        bot.px = bot.x;
+        bot.py = bot.y;
+      }
     }
     updateAi(dt, tracking, maxSpeed, targetX, targetY) {
       const cornerRetreat = this.aiRetreatFrames > 0;
-      const jamRetreat = this.releaseFrames > 0 && this.releasedMallet === "ai";
+      const jamRetreat = this.releaseFrames > 0 && this.releasedMallet === this.opponent;
       const x = cornerRetreat ? this.puck.x < W / 2 ? 190 : W - 190 : jamRetreat ? W / 2 : targetX;
       const y = cornerRetreat ? 220 : jamRetreat ? 205 : targetY;
       const factor = cornerRetreat || jamRetreat ? 0.18 : tracking;
@@ -298,6 +331,72 @@
         } else {
           this.puck.x = Math.min(this.puck.x, W - PUCK_R - 24);
           this.puck.vx = -Math.max(9, Math.abs(this.puck.vx));
+        }
+      }
+    }
+    updateTeams(dt, tracking, maxSpeed) {
+      const move = (bot, targetX, targetY, speedScale = 1) => {
+        const speed = maxSpeed * speedScale;
+        const factor = tracking * (speedScale > 1 ? 1.15 : 1);
+        bot.x += clamp((targetX - bot.x) * factor * dt, -speed * dt, speed * dt);
+        bot.y += clamp((targetY - bot.y) * factor * dt, -speed * dt, speed * dt);
+        bot.x = clamp(bot.x, MALLET_R + 18, W - MALLET_R - 18);
+      };
+      const [enemyKeeper, enemyMidfielder, enemyAttacker] = this.enemyBots;
+      const enemyDanger = this.puck.y < H * 0.32;
+      move(enemyKeeper, clamp(this.puck.x, W / 2 - GOAL * 0.55, W / 2 + GOAL * 0.55), enemyDanger ? this.puck.y + 78 : 135, 0.9);
+      move(enemyMidfielder, this.puck.y < H * 0.78 ? this.puck.x : W * 0.35, this.puck.y < H * 0.78 ? this.puck.y - 82 : H * 0.37, 0.96);
+      move(enemyAttacker, this.puck.x, this.puck.y - 70, 1.12);
+      const [allyKeeper, allyMidfielder] = this.alliedBots;
+      const allyDanger = this.puck.y > H * 0.68;
+      move(allyKeeper, clamp(this.puck.x, W / 2 - GOAL * 0.55, W / 2 + GOAL * 0.55), allyDanger ? this.puck.y + 78 : H - 135, 0.88);
+      const supportX = this.puck.x * 0.72 + this.player.x * 0.28;
+      const supportY = this.puck.y + Math.sign(this.player.y - this.puck.y || 1) * 82;
+      move(allyMidfielder, supportX, supportY, 1.02);
+      for (const bot of [...this.enemyBots, ...this.alliedBots]) {
+        bot.y = clamp(bot.y, MALLET_R + 24, H - MALLET_R - 22);
+      }
+      this.separateTeam(this.enemyBots, MALLET_R + 24, H - MALLET_R - 22);
+      this.separateTeam(this.alliedBots, MALLET_R + 24, H - MALLET_R - 22);
+      for (const bot of this.alliedBots) this.pushBotAwayFromPlayer(bot);
+    }
+    pushBotAwayFromPlayer(bot) {
+      let dx = bot.x - this.player.x, dy = bot.y - this.player.y;
+      let distance = Math.hypot(dx, dy);
+      const minimum = MALLET_R * 2 + 14;
+      if (distance >= minimum) return;
+      if (!distance) {
+        dx = 1;
+        dy = 0;
+        distance = 1;
+      }
+      const push = minimum - distance;
+      bot.x = clamp(bot.x + dx / distance * push, MALLET_R + 18, W - MALLET_R - 18);
+      bot.y = clamp(bot.y + dy / distance * push, MALLET_R + 24, H - MALLET_R - 22);
+    }
+    separateTeam(team, minY, maxY) {
+      const minimum = MALLET_R * 2 + 14;
+      for (let i = 0; i < team.length; i++) {
+        for (let j = i + 1; j < team.length; j++) {
+          const a = team[i], b = team[j];
+          let dx = b.x - a.x, dy = b.y - a.y;
+          let distance = Math.hypot(dx, dy);
+          if (distance >= minimum) continue;
+          if (!distance) {
+            dx = 1;
+            dy = 0;
+            distance = 1;
+          }
+          const push = (minimum - distance) / 2;
+          const nx = dx / distance, ny = dy / distance;
+          a.x -= nx * push;
+          a.y -= ny * push;
+          b.x += nx * push;
+          b.y += ny * push;
+          a.x = clamp(a.x, MALLET_R + 18, W - MALLET_R - 18);
+          b.x = clamp(b.x, MALLET_R + 18, W - MALLET_R - 18);
+          a.y = clamp(a.y, minY, maxY);
+          b.y = clamp(b.y, minY, maxY);
         }
       }
     }
@@ -327,12 +426,13 @@
     resolveJam(dt) {
       const left = this.puck.x < PUCK_R + 60, right = this.puck.x > W - PUCK_R - 60;
       const top = this.puck.y < PUCK_R + 60, bottom = this.puck.y > H - PUCK_R - 60;
-      const aiDistance = Math.hypot(this.puck.x - this.opponent.x, this.puck.y - this.opponent.y);
-      const playerDistance = Math.hypot(this.puck.x - this.player.x, this.puck.y - this.player.y);
-      const touching = Math.min(aiDistance, playerDistance) < PUCK_R + MALLET_R + 10;
+      const mallets = this.mode === "three" && this.role === "solo" ? [this.player, ...this.alliedBots, ...this.enemyBots] : [this.player, this.opponent];
+      const closest = mallets.reduce((best, mallet) => Math.hypot(this.puck.x - mallet.x, this.puck.y - mallet.y) < Math.hypot(this.puck.x - best.x, this.puck.y - best.y) ? mallet : best);
+      const closestDistance = Math.hypot(this.puck.x - closest.x, this.puck.y - closest.y);
+      const touching = closestDistance < PUCK_R + MALLET_R + 10;
       this.jamFrames = this.releaseFrames > 0 ? 0 : (left || right || top || bottom) && touching ? this.jamFrames + dt : 0;
       if (this.jamFrames <= 20) return;
-      this.releasedMallet = aiDistance < playerDistance ? "ai" : "player";
+      this.releasedMallet = closest;
       this.releaseFrames = 20;
       if (left) {
         this.puck.x = PUCK_R + 26;
@@ -434,8 +534,12 @@
       this.ctx.drawImage(this.board, 0, 0, W, H);
       const flip = this.role === "guest";
       const view = (disc) => flip ? { ...disc, x: W - disc.x, y: H - disc.y } : disc;
-      this.drawMallet(view(this.player), flip ? "#ff4d7d" : "#58f6d0");
-      this.drawMallet(view(this.opponent), flip ? "#58f6d0" : "#ff4d7d");
+      const playerColor = this.mode === "three" && this.role === "solo" ? "#5f82ff" : flip ? "#ff4d7d" : "#58f6d0";
+      this.drawMallet(view(this.player), playerColor);
+      if (this.mode === "three" && this.role === "solo") {
+        for (const bot of this.alliedBots) this.drawMallet(view(bot), "#58f6d0");
+        for (const bot of this.enemyBots) this.drawMallet(view(bot), "#ff4d7d");
+      } else this.drawMallet(view(this.opponent), flip ? "#58f6d0" : "#ff4d7d");
       const x = flip ? W - this.puck.x : this.puck.x, y = flip ? H - this.puck.y : this.puck.y;
       this.ctx.save();
       this.ctx.shadowBlur = reducedEffects ? 0 : 30;
@@ -459,6 +563,7 @@
   };
 
   // src/network.ts
+  var roomApi = new URL("api/rooms", document.baseURI).toString();
   var NetworkManager = class {
     constructor(game2, sound2) {
       this.game = game2;
@@ -475,6 +580,7 @@
     lastReceivedInput = -1;
     lastInputSentAt = 0;
     openMenu() {
+      if (this.game.mode === "three") return;
       this.close();
       this.game.setRole("solo");
       document.querySelector("[data-role].active")?.classList.remove("active");
@@ -490,6 +596,7 @@
       this.game.setState("setup");
     }
     async chooseRole(role) {
+      if (this.game.mode === "three") throw new Error("Direct Match supports 1 VS 1 only");
       this.game.setRole(role);
       this.game.sound.ensure();
       document.querySelector("[data-role].active")?.classList.remove("active");
@@ -517,13 +624,13 @@
       ui.applyCode.disabled = true;
       try {
         ui.networkStatus.textContent = "Finding room\u2026";
-        const response = await fetch(`/api/rooms/${code}`);
+        const response = await fetch(`${roomApi}/${encodeURIComponent(code)}`);
         if (!response.ok) throw new Error("Room not found");
         const room = await response.json();
         await this.peer.setRemoteDescription(room.offer);
         await this.peer.setLocalDescription(await this.peer.createAnswer());
         await this.waitForIce(this.peer);
-        const answerResponse = await fetch(`/api/rooms/${code}/answer`, {
+        const answerResponse = await fetch(`${roomApi}/${encodeURIComponent(code)}/answer`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ answer: this.peer.localDescription })
@@ -556,7 +663,7 @@
       this.bindChannel(connection.createDataChannel("air-hockey", { ordered: false, maxRetransmits: 0 }));
       await connection.setLocalDescription(await connection.createOffer());
       await this.waitForIce(connection);
-      const response = await fetch("/api/rooms", {
+      const response = await fetch(roomApi, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ offer: connection.localDescription })
@@ -568,7 +675,7 @@
       ui.networkStatus.textContent = "Send this code to player 2. Waiting for connection\u2026";
       this.roomPoll = window.setInterval(async () => {
         if (!this.peer || this.peer.remoteDescription) return;
-        const check = await fetch(`/api/rooms/${data.code}`);
+        const check = await fetch(`${roomApi}/${encodeURIComponent(data.code)}`);
         if (!check.ok) return;
         const room = await check.json();
         if (room.answer) {
@@ -660,6 +767,11 @@
     document.querySelector("[data-level].active")?.classList.remove("active");
     button.classList.add("active");
     game.setDifficulty(button.dataset.level);
+  }));
+  document.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelector("[data-mode].active")?.classList.remove("active");
+    button.classList.add("active");
+    game.setMode(button.dataset.mode);
   }));
   document.querySelector("#start").addEventListener("click", () => {
     game.setRole("solo");

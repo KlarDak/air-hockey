@@ -2,6 +2,7 @@ export type GameState = "setup" | "playing" | "paused" | "over";
 export type Difficulty = "rookie" | "pro" | "legend";
 export type SoundKind = "rail" | "mallet" | "goal";
 export type NetworkRole = "solo" | "host" | "guest";
+export type GameMode = "duel" | "three";
 export type Disc = { x: number; y: number; px: number; py: number };
 export type Puck = { x: number; y: number; vx: number; vy: number };
 export type Particle = { x: number; y: number; vx: number; vy: number; life: number; color: string };

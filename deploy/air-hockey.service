@@ -1,0 +1,18 @@
+[Unit]
+Description=Air Hockey signaling and static server
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/air-hockey
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=5174
+ExecStart=/usr/bin/node /var/www/air-hockey/dist/server.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

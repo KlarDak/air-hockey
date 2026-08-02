@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
 import { extname, join, normalize } from "node:path";
 import { readFile, stat } from "node:fs/promises";
-var host = "0.0.0.0";
+var host = process.env.HOST ?? "0.0.0.0";
 var port = Number(process.env.PORT ?? 5173);
 var root = process.cwd();
 var rooms = /* @__PURE__ */ new Map();

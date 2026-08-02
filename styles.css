@@ -17,6 +17,9 @@ canvas { display: block; width: min(92vw, 55dvh, 520px); height: auto; touch-act
 .card h2 { margin: 8px 0 23px; font-size: clamp(25px, 7vw, 34px); line-height: 1.05; letter-spacing: -.04em; text-transform: uppercase; }
 .card p { margin: 16px 0 0; color: #666f91; font: 700 10px ui-monospace, monospace; letter-spacing: .14em; text-transform: uppercase; }
 .options { display: grid; gap: 8px; margin-bottom: 18px; }
+.mode-options { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: -10px 0 12px; }
+.mode-options button { padding: 10px; border: 1px solid rgb(255 255 255 / 10%); border-radius: 999px; background: #111630; color: #8991af; font-weight: 900; cursor: pointer; }
+.mode-options button:hover, .mode-options button.active { border-color: #58f6d0; background: #18344a; color: #fff; }
 .options button { display: flex; gap: 14px; width: 100%; padding: 13px 16px; border: 1px solid rgb(255 255 255 / 10%); border-radius: 12px; background: #111630; color: #8991af; font-weight: 800; text-align: left; text-transform: uppercase; cursor: pointer; transition: .18s ease; }
 .options small { color: #4f5879; } .options button:hover, .options button.active { border-color: #607fe5; background: #253361; color: #fff; transform: translateX(3px); }
 .primary, .controls button, .text-button { border: 1px solid rgb(255 255 255 / 14%); color: #fff; cursor: pointer; font-weight: 800; text-transform: uppercase; transition: .18s ease; }
@@ -25,6 +28,7 @@ canvas { display: block; width: min(92vw, 55dvh, 520px); height: auto; touch-act
 .online-button, .copy-button, .network-roles button { width: 100%; padding: 11px 14px; border: 1px solid rgb(255 255 255 / 12%); border-radius: 999px; background: #121831; color: #aeb6d4; font-weight: 800; text-transform: uppercase; cursor: pointer; }
 .online-button { margin-top: 9px; }
 .online-button:hover, .copy-button:hover, .network-roles button:hover, .network-roles button.active { border-color: #58f6d0; color: #fff; background: #18344a; }
+.online-button:disabled { opacity: .42; cursor: not-allowed; border-color: rgb(255 255 255 / 8%); background: #0e1328; color: #6d7592; }
 .network-card { width: min(88%, 410px); max-height: 92%; overflow-y: auto; }
 .network-card h2 { margin-bottom: 16px; }
 .network-roles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; }
