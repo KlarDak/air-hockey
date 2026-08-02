@@ -92,7 +92,7 @@ Despite the module structure, esbuild bundles the browser code into a single `di
 
 Multiplayer requires the Node.js server: uploading only the static files is not enough because `server.ts` provides the temporary room API used to exchange WebRTC connection data.
 
-The production templates in `deploy/` assume that the project is uploaded to `/var/www/air-hockey`, Node.js listens on `127.0.0.1:5174`, and Nginx exposes it at `https://wwbt-blog.ru/sandbox/air-hockey/`.
+The production templates in `deploy/` assume that the project is uploaded to `/var/www/air-hockey`, Node.js listens on `127.0.0.1:5174`, and Apache exposes it at `https://wwbt-blog.ru/sandbox/air-hockey/`.
 
 ```bash
 cd /var/www/air-hockey
@@ -104,12 +104,22 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now air-hockey
 ```
 
-Copy the two `location` blocks from `deploy/nginx-air-hockey.conf` into the existing HTTPS `server` block for the domain, then validate and reload Nginx:
+Enable the required Apache modules:
 
 ```bash
-sudo nginx -t
-sudo systemctl reload nginx
+sudo a2enmod proxy proxy_http headers
 ```
+
+Copy the directives from `deploy/apache-air-hockey.conf` into the existing HTTPS `<VirtualHost *:443>` for the domain. The proxy rules must not be placed inside a `<Directory>` block.
+
+Then validate and reload Apache:
+
+```bash
+sudo apachectl configtest
+sudo systemctl reload apache2
+```
+
+On distributions that call the service `httpd`, use `sudo systemctl reload httpd` instead.
 
 Verify the room API:
 
