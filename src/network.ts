@@ -21,6 +21,7 @@ export class NetworkManager {
   private lastReceivedInput = -1;
   private lastInputSentAt = 0;
   private manuallyClosed = false;
+  private matchConnected = false;
 
   constructor(private readonly game: Game, sound: SoundSystem) {
     sound.broadcast = kind => this.sendSound(kind);
@@ -38,7 +39,7 @@ export class NetworkManager {
   back(): void { this.close(); this.game.setRole("solo"); this.game.setState("setup"); }
   async chooseRole(role: Exclude<NetworkRole, "solo">): Promise<void> {
     if (this.game.mode === "three") throw new Error("Direct Match supports 1 VS 1 only");
-    this.close(); this.game.setRole(role); this.game.sound.ensure();
+    this.close(); this.matchConnected = false; this.game.setRole(role); this.game.sound.ensure();
     document.querySelector("[data-role].active")?.classList.remove("active");
     document.querySelector(`[data-role="${role}"]`)?.classList.add("active");
     ui.roomCode.value = ""; ui.roomCode.readOnly = role === "host"; ui.copyCode.disabled = true;
@@ -65,7 +66,7 @@ export class NetworkManager {
     catch { ui.roomCode.select(); document.execCommand("copy"); }
     ui.copyCode.textContent = "Copied"; window.setTimeout(() => ui.copyCode.textContent = "Copy room code", 1200);
   }
-  close(): void { this.manuallyClosed = true; this.socket?.close(); this.socket = null; }
+  close(): void { this.manuallyClosed = true; this.matchConnected = false; this.socket?.close(); this.socket = null; }
   private connect(): Promise<void> {
     this.manuallyClosed = false;
     return new Promise((resolve, reject) => {
@@ -86,11 +87,15 @@ export class NetworkManager {
       ui.roomCode.value = message.code; ui.copyCode.disabled = false;
       ui.networkStatus.textContent = "Send this code to player 2. Waiting for connection…";
     } else if (message.type === "connected") {
+      this.matchConnected = true;
       this.snapshotSequence = this.inputSequence = 0; this.lastReceivedSnapshot = this.lastReceivedInput = -1;
       ui.networkStatus.textContent = "Connected — dropping the puck"; this.game.sound.ensure();
       if (message.role === "host") this.game.start(); else { this.game.resetPuck(); this.game.setState("playing"); }
     } else if (message.type === "relay") this.receive(message.payload);
-    else if (message.type === "peer-left") ui.networkStatus.textContent = "Other player disconnected — create a fresh room";
+    else if (message.type === "peer-left") {
+      this.matchConnected = false;
+      ui.networkStatus.textContent = "Other player disconnected — create a fresh room";
+    }
     else if (message.type === "error") { ui.networkStatus.textContent = message.message; ui.applyCode.disabled = false; }
   }
   private receive(data: PeerMessage): void {
@@ -107,7 +112,9 @@ export class NetworkManager {
     if (this.socket?.readyState !== WebSocket.OPEN) throw new Error("Game server is not connected");
     this.socket.send(JSON.stringify(data));
   }
-  private relay(payload: PeerMessage): void { if (this.socket?.readyState === WebSocket.OPEN) this.send({ type: "relay", payload }); }
+  private relay(payload: PeerMessage): void {
+    if (this.matchConnected && this.socket?.readyState === WebSocket.OPEN) this.send({ type: "relay", payload });
+  }
   private sendInput(x: number, y: number): void {
     const now = performance.now(); if (now - this.lastInputSentAt < 16) return;
     this.relay({ type: "input", seq: this.inputSequence++, x, y }); this.lastInputSentAt = now;

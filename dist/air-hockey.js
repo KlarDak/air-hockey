@@ -579,6 +579,7 @@
     lastReceivedInput = -1;
     lastInputSentAt = 0;
     manuallyClosed = false;
+    matchConnected = false;
     openMenu() {
       if (this.game.mode === "three") return;
       this.close();
@@ -598,6 +599,7 @@
     async chooseRole(role) {
       if (this.game.mode === "three") throw new Error("Direct Match supports 1 VS 1 only");
       this.close();
+      this.matchConnected = false;
       this.game.setRole(role);
       this.game.sound.ensure();
       document.querySelector("[data-role].active")?.classList.remove("active");
@@ -645,6 +647,7 @@
     }
     close() {
       this.manuallyClosed = true;
+      this.matchConnected = false;
       this.socket?.close();
       this.socket = null;
     }
@@ -679,6 +682,7 @@
         ui.copyCode.disabled = false;
         ui.networkStatus.textContent = "Send this code to player 2. Waiting for connection\u2026";
       } else if (message.type === "connected") {
+        this.matchConnected = true;
         this.snapshotSequence = this.inputSequence = 0;
         this.lastReceivedSnapshot = this.lastReceivedInput = -1;
         ui.networkStatus.textContent = "Connected \u2014 dropping the puck";
@@ -689,8 +693,10 @@
           this.game.setState("playing");
         }
       } else if (message.type === "relay") this.receive(message.payload);
-      else if (message.type === "peer-left") ui.networkStatus.textContent = "Other player disconnected \u2014 create a fresh room";
-      else if (message.type === "error") {
+      else if (message.type === "peer-left") {
+        this.matchConnected = false;
+        ui.networkStatus.textContent = "Other player disconnected \u2014 create a fresh room";
+      } else if (message.type === "error") {
         ui.networkStatus.textContent = message.message;
         ui.applyCode.disabled = false;
       }
@@ -712,7 +718,7 @@
       this.socket.send(JSON.stringify(data));
     }
     relay(payload) {
-      if (this.socket?.readyState === WebSocket.OPEN) this.send({ type: "relay", payload });
+      if (this.matchConnected && this.socket?.readyState === WebSocket.OPEN) this.send({ type: "relay", payload });
     }
     sendInput(x, y) {
       const now = performance.now();
