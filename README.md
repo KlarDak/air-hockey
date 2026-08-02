@@ -78,43 +78,6 @@ The TypeScript source is split into focused modules:
 
 esbuild bundles the browser modules into one `dist/air-hockey.js`. The Node.js WebSocket server is built separately as `dist/server.js`; its runtime dependency `ws` remains in `node_modules`.
 
-## Deploying on a VPS with Apache
-
-Static files alone are sufficient only for solo play. Online multiplayer requires the Node.js relay.
-
-The templates in `deploy/` assume `/var/www/air-hockey`, Node.js on `127.0.0.1:5174`, and the public URL `https://wwbt-blog.ru/sandbox/air-hockey/`.
-
-```bash
-cd /var/www/air-hockey
-npm ci
-npm run build
-
-sudo cp deploy/air-hockey.service /etc/systemd/system/air-hockey.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now air-hockey
-```
-
-Enable Apache proxy modules:
-
-```bash
-sudo a2enmod proxy proxy_http proxy_wstunnel
-```
-
-Copy the directives from `deploy/apache-air-hockey.conf` into the active HTTPS `<VirtualHost *:443>` for the domain. Keep the WebSocket rule above any broader `ProxyPass` rule. Do not place it inside `<Directory>`.
-
-```bash
-sudo apachectl configtest
-sudo systemctl reload apache2
-```
-
-Verify the public route to Node.js:
-
-```bash
-curl -i https://wwbt-blog.ru/sandbox/air-hockey/health
-```
-
-The response should be `200` with `{"ok":true}`. Multiplayer connects to `wss://wwbt-blog.ru/sandbox/air-hockey/socket`.
-
 ## Embedding
 
 For solo play, build the project and copy `dist/air-hockey.js`, `index.html`, `styles.css`, and `favicon.svg`. The script expects the canvas and controls defined in `index.html`. Online Match additionally requires the WebSocket relay in `server.ts` or a compatible implementation of its room protocol.
