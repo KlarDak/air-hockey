@@ -37,6 +37,7 @@
   var GOAL = 250;
   var PUCK_R = 24;
   var MALLET_R = 48;
+  var NETWORK_FRAME_MS = 1e3 / 120;
   var reducedEffects = matchMedia("(pointer: coarse)").matches || (navigator.hardwareConcurrency ?? 8) <= 4;
   var renderScale = reducedEffects ? 0.5 : 1;
   var clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -196,7 +197,7 @@
       this.lastTime = time;
       if (this.state === "playing" && this.role !== "guest") this.update(dt);
       if (this.role === "guest" && this.networkTarget) this.interpolateGuest(time);
-      if (this.role === "host" && time - this.lastSnapshotAt > (reducedEffects ? 15 : 30)) {
+      if (this.role === "host" && time - this.lastSnapshotAt >= NETWORK_FRAME_MS) {
         this.onHostSnapshot?.({ state: this.state, score: this.score, player: this.player, opponent: this.opponent, puck: this.puck });
         this.lastSnapshotAt = time;
       }
@@ -239,13 +240,17 @@
       } else this.resetPuck(playerScored);
     }
     hitMallet(mallet) {
-      const dx = this.puck.x - mallet.x, dy = this.puck.y - mallet.y;
+      const travelX = mallet.x - mallet.px, travelY = mallet.y - mallet.py;
+      const travelLengthSq = travelX * travelX + travelY * travelY;
+      const sweep = travelLengthSq ? clamp(((this.puck.x - mallet.px) * travelX + (this.puck.y - mallet.py) * travelY) / travelLengthSq, 0, 1) : 1;
+      const contactX = mallet.px + travelX * sweep, contactY = mallet.py + travelY * sweep;
+      const dx = this.puck.x - contactX, dy = this.puck.y - contactY;
       const distance = Math.hypot(dx, dy), minimum = PUCK_R + MALLET_R;
       if (!distance || distance >= minimum) return;
       const nx = dx / distance, ny = dy / distance;
-      this.puck.x = mallet.x + nx * minimum;
-      this.puck.y = mallet.y + ny * minimum;
-      const mvx = mallet.x - mallet.px, mvy = mallet.y - mallet.py;
+      this.puck.x = contactX + nx * minimum;
+      this.puck.y = contactY + ny * minimum;
+      const mvx = travelX, mvy = travelY;
       const relative = (this.puck.vx - mvx) * nx + (this.puck.vy - mvy) * ny;
       if (relative < 0) {
         this.puck.vx -= 1.85 * relative * nx;
@@ -718,11 +723,13 @@
       this.socket.send(JSON.stringify(data));
     }
     relay(payload) {
-      if (this.matchConnected && this.socket?.readyState === WebSocket.OPEN) this.send({ type: "relay", payload });
+      if (this.matchConnected && this.socket?.readyState === WebSocket.OPEN && this.socket.bufferedAmount < 32e3) {
+        this.send({ type: "relay", payload });
+      }
     }
     sendInput(x, y) {
       const now = performance.now();
-      if (now - this.lastInputSentAt < 16) return;
+      if (now - this.lastInputSentAt < NETWORK_FRAME_MS) return;
       this.relay({ type: "input", seq: this.inputSequence++, x, y });
       this.lastInputSentAt = now;
     }

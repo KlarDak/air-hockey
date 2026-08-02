@@ -1,4 +1,4 @@
-import { GOAL, H, MALLET_R, PUCK_R, W, clamp, reducedEffects, renderScale } from "./config";
+import { GOAL, H, MALLET_R, NETWORK_FRAME_MS, PUCK_R, W, clamp, reducedEffects, renderScale } from "./config";
 import { SoundSystem } from "./audio";
 import { ui } from "./ui";
 import type { Difficulty, Disc, GameMode, GameState, NetworkRole, Particle, Puck, Snapshot } from "./types";
@@ -136,7 +136,7 @@ export class Game {
     this.lastTime = time;
     if (this.state === "playing" && this.role !== "guest") this.update(dt);
     if (this.role === "guest" && this.networkTarget) this.interpolateGuest(time);
-    if (this.role === "host" && time - this.lastSnapshotAt > (reducedEffects ? 15 : 30)) {
+    if (this.role === "host" && time - this.lastSnapshotAt >= NETWORK_FRAME_MS) {
       this.onHostSnapshot?.({ state: this.state, score: this.score, player: this.player, opponent: this.opponent, puck: this.puck });
       this.lastSnapshotAt = time;
     }
@@ -175,13 +175,19 @@ export class Game {
   }
 
   private hitMallet(mallet: Disc): void {
-    const dx = this.puck.x - mallet.x, dy = this.puck.y - mallet.y;
+    const travelX = mallet.x - mallet.px, travelY = mallet.y - mallet.py;
+    const travelLengthSq = travelX * travelX + travelY * travelY;
+    const sweep = travelLengthSq
+      ? clamp(((this.puck.x - mallet.px) * travelX + (this.puck.y - mallet.py) * travelY) / travelLengthSq, 0, 1)
+      : 1;
+    const contactX = mallet.px + travelX * sweep, contactY = mallet.py + travelY * sweep;
+    const dx = this.puck.x - contactX, dy = this.puck.y - contactY;
     const distance = Math.hypot(dx, dy), minimum = PUCK_R + MALLET_R;
     if (!distance || distance >= minimum) return;
     const nx = dx / distance, ny = dy / distance;
-    this.puck.x = mallet.x + nx * minimum;
-    this.puck.y = mallet.y + ny * minimum;
-    const mvx = mallet.x - mallet.px, mvy = mallet.y - mallet.py;
+    this.puck.x = contactX + nx * minimum;
+    this.puck.y = contactY + ny * minimum;
+    const mvx = travelX, mvy = travelY;
     const relative = (this.puck.vx - mvx) * nx + (this.puck.vy - mvy) * ny;
     if (relative < 0) { this.puck.vx -= 1.85 * relative * nx; this.puck.vy -= 1.85 * relative * ny; }
     this.puck.vx += mvx * .55; this.puck.vy += mvy * .55;

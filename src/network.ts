@@ -1,6 +1,7 @@
 import { Game } from "./game";
 import { SoundSystem } from "./audio";
 import { ui } from "./ui";
+import { NETWORK_FRAME_MS } from "./config";
 import type { NetworkRole, PeerMessage, Snapshot, SoundKind } from "./types";
 
 type ServerMessage =
@@ -113,10 +114,12 @@ export class NetworkManager {
     this.socket.send(JSON.stringify(data));
   }
   private relay(payload: PeerMessage): void {
-    if (this.matchConnected && this.socket?.readyState === WebSocket.OPEN) this.send({ type: "relay", payload });
+    if (this.matchConnected && this.socket?.readyState === WebSocket.OPEN && this.socket.bufferedAmount < 32_000) {
+      this.send({ type: "relay", payload });
+    }
   }
   private sendInput(x: number, y: number): void {
-    const now = performance.now(); if (now - this.lastInputSentAt < 16) return;
+    const now = performance.now(); if (now - this.lastInputSentAt < NETWORK_FRAME_MS) return;
     this.relay({ type: "input", seq: this.inputSequence++, x, y }); this.lastInputSentAt = now;
   }
   private sendSnapshot(data: Omit<Snapshot, "type" | "seq">): void { this.relay({ type: "snapshot", seq: this.snapshotSequence++, ...data }); }
