@@ -5,7 +5,7 @@ body { min-height: 100dvh; display: grid; place-items: center; overflow-x: hidde
 button { font: inherit; }
 .game-shell { display: grid; justify-items: center; gap: 14px; padding: 22px 12px; }
 .brand { width: min(92vw, 55dvh, 520px); display: flex; align-items: end; justify-content: space-between; }
-.brand h1 { margin: 2px 0 0; font-size: clamp(27px, 5vw, 40px); letter-spacing: -.055em; line-height: 1; text-transform: uppercase; }
+.brand h1 { margin: 2px 0 0; font-size: clamp(24px, 4vw, 38px); letter-spacing: -.055em; line-height: 1; text-transform: uppercase; }
 .eyebrow, .hint { color: #858cac; font: 750 10px ui-monospace, monospace; letter-spacing: .18em; text-transform: uppercase; }
 .score { display: flex; align-items: center; gap: 9px; font: 700 26px ui-monospace, monospace; line-height: 1; }
 .score b:first-child { color: var(--mint); } .score b:last-child { color: var(--pink); } .score span { color: #515976; }
