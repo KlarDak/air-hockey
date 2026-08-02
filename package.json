@@ -1,19 +1,23 @@
 {
   "name": "air-hockey",
-  "description": "Fast-paced neon air hockey with a computer opponent and direct peer-to-peer multiplayer over WebRTC.",
+  "description": "Fast-paced neon air hockey with a computer opponent and server-relayed multiplayer over WebSocket.",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "check": "tsc --noEmit",
-    "build": "npm run clean && npm run check && esbuild src/main.ts --bundle --format=iife --target=es2022 --sourcemap --outfile=dist/air-hockey.js && esbuild server.ts --bundle --platform=node --format=esm --target=node20 --sourcemap --outfile=dist/server.js",
+    "build": "npm run clean && npm run check && esbuild src/main.ts --bundle --format=iife --target=es2022 --sourcemap --outfile=dist/air-hockey.js && esbuild server.ts --bundle --platform=node --packages=external --format=esm --target=node20 --sourcemap --outfile=dist/server.js",
     "dev": "npm run build && node dist/server.js",
     "start": "node dist/server.js"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
     "esbuild": "^0.25.8",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "ws": "^8.21.1"
   }
 }

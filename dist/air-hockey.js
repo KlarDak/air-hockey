@@ -128,7 +128,7 @@
       const teamMode = value === "three";
       ui.leagueLabel.textContent = teamMode ? "TEAM LEAGUE / 02" : "NEON LEAGUE / 01";
       ui.onlineButton.disabled = teamMode;
-      ui.onlineButton.textContent = teamMode ? "Direct match \xB7 1 VS 1 only" : "Play peer-to-peer";
+      ui.onlineButton.textContent = teamMode ? "Online match \xB7 1 VS 1 only" : "Play online";
     }
     start() {
       this.sound.ensure();
@@ -563,7 +563,8 @@
   };
 
   // src/network.ts
-  var roomApi = new URL("api/rooms", document.baseURI).toString();
+  var socketUrl = new URL("socket", document.baseURI);
+  socketUrl.protocol = location.protocol === "https:" ? "wss:" : "ws:";
   var NetworkManager = class {
     constructor(game2, sound2) {
       this.game = game2;
@@ -571,15 +572,13 @@
       game2.onGuestInput = (x, y) => this.sendInput(x, y);
       game2.onHostSnapshot = (snapshot) => this.sendSnapshot(snapshot);
     }
-    peer = null;
-    channel = null;
-    roomPoll = null;
+    socket = null;
     snapshotSequence = 0;
     inputSequence = 0;
     lastReceivedSnapshot = -1;
     lastReceivedInput = -1;
     lastInputSentAt = 0;
-    disconnectTimer = null;
+    manuallyClosed = false;
     openMenu() {
       if (this.game.mode === "three") return;
       this.close();
@@ -598,22 +597,24 @@
     }
     async chooseRole(role) {
       if (this.game.mode === "three") throw new Error("Direct Match supports 1 VS 1 only");
+      this.close();
       this.game.setRole(role);
       this.game.sound.ensure();
       document.querySelector("[data-role].active")?.classList.remove("active");
       document.querySelector(`[data-role="${role}"]`)?.classList.add("active");
-      this.stopPolling();
       ui.roomCode.value = "";
       ui.roomCode.readOnly = role === "host";
       ui.copyCode.disabled = true;
       ui.roomControls.hidden = false;
       ui.applyCode.hidden = role !== "guest";
       ui.copyCode.hidden = role !== "host";
-      const connection = this.createPeer();
-      if (role === "host") await this.createRoom(connection);
-      else {
-        connection.addEventListener("datachannel", (event) => this.bindChannel(event.channel), { once: true });
-        ui.applyCode.disabled = true;
+      ui.applyCode.disabled = true;
+      ui.networkStatus.textContent = "Connecting to game server\u2026";
+      await this.connect();
+      if (role === "host") {
+        this.send({ type: "create" });
+        ui.networkStatus.textContent = "Creating room\u2026";
+      } else {
         ui.applyCode.textContent = "Join room";
         ui.networkStatus.textContent = "Enter the six-character code from the host";
         ui.roomCode.focus();
@@ -621,25 +622,14 @@
     }
     async joinRoom() {
       const code = ui.roomCode.value.trim().toUpperCase();
-      if (!this.peer || code.length !== 6 || this.game.role !== "guest") return;
+      if (code.length !== 6 || this.game.role !== "guest") return;
       ui.applyCode.disabled = true;
+      ui.networkStatus.textContent = "Joining room\u2026";
       try {
-        ui.networkStatus.textContent = "Finding room\u2026";
-        const response = await fetch(`${roomApi}/${encodeURIComponent(code)}`);
-        if (!response.ok) throw new Error("Room not found");
-        const room = await response.json();
-        await this.peer.setRemoteDescription(room.offer);
-        await this.peer.setLocalDescription(await this.peer.createAnswer());
-        await this.waitForIce(this.peer);
-        const answerResponse = await fetch(`${roomApi}/${encodeURIComponent(code)}/answer`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ answer: this.peer.localDescription })
-        });
-        if (!answerResponse.ok) throw new Error("Could not join room");
-        ui.networkStatus.textContent = "Room found. Connecting\u2026";
+        if (this.socket?.readyState !== WebSocket.OPEN) await this.connect();
+        this.send({ type: "join", code });
       } catch (error) {
-        ui.networkStatus.textContent = error instanceof Error ? error.message : "Room not found or expired. Check the code";
+        ui.networkStatus.textContent = error instanceof Error ? error.message : "Could not reach game server";
         ui.applyCode.disabled = false;
       }
     }
@@ -654,148 +644,87 @@
       window.setTimeout(() => ui.copyCode.textContent = "Copy room code", 1200);
     }
     close() {
-      this.stopPolling();
-      this.clearDisconnectTimer();
-      this.peer?.close();
-      this.peer = null;
-      this.channel = null;
+      this.manuallyClosed = true;
+      this.socket?.close();
+      this.socket = null;
     }
-    async createRoom(connection) {
-      ui.networkStatus.textContent = "Creating a six-character room\u2026";
-      this.bindChannel(connection.createDataChannel("air-hockey", { ordered: true }));
-      await connection.setLocalDescription(await connection.createOffer());
-      await this.waitForIce(connection);
-      const response = await fetch(roomApi, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ offer: connection.localDescription })
+    connect() {
+      this.manuallyClosed = false;
+      return new Promise((resolve, reject) => {
+        const socket = new WebSocket(socketUrl);
+        const timeout = window.setTimeout(() => {
+          socket.close();
+          reject(new Error("Game server connection timed out"));
+        }, 8e3);
+        socket.addEventListener("open", () => {
+          window.clearTimeout(timeout);
+          this.socket = socket;
+          resolve();
+        }, { once: true });
+        socket.addEventListener("error", () => {
+          window.clearTimeout(timeout);
+          reject(new Error("Could not connect to game server"));
+        }, { once: true });
+        socket.addEventListener("message", (event) => this.handleServerMessage(JSON.parse(String(event.data))));
+        socket.addEventListener("close", () => {
+          const wasCurrent = this.socket === socket;
+          if (wasCurrent) this.socket = null;
+          if (wasCurrent && !this.manuallyClosed && this.game.role !== "solo") ui.networkStatus.textContent = "Game server connection lost";
+        });
       });
-      if (!response.ok) throw new Error(`Room API returned ${response.status}: ${new URL(roomApi).pathname}`);
-      const data = await response.json();
-      ui.roomCode.value = data.code;
-      ui.copyCode.disabled = false;
-      ui.networkStatus.textContent = "Send this code to player 2. Waiting for connection\u2026";
-      this.roomPoll = window.setInterval(async () => {
-        if (!this.peer || this.peer.remoteDescription) return;
-        const check = await fetch(`${roomApi}/${encodeURIComponent(data.code)}`);
-        if (!check.ok) return;
-        const room = await check.json();
-        if (room.answer) {
-          await this.peer.setRemoteDescription(room.answer);
-          this.stopPolling();
-          ui.networkStatus.textContent = "Player found. Connecting\u2026";
-        }
-      }, 700);
     }
-    createPeer() {
-      if (!("RTCPeerConnection" in window)) {
-        throw new Error("WebRTC is unavailable. Use HTTPS or localhost");
-      }
-      this.peer?.close();
-      const connection = new RTCPeerConnection({
-        iceCandidatePoolSize: 4,
-        bundlePolicy: "max-bundle",
-        iceServers: [
-          { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
-          { urls: "stun:stun.cloudflare.com:3478" }
-        ]
-      });
-      connection.addEventListener("connectionstatechange", () => {
-        const state = connection.connectionState;
-        if (state === "connected") {
-          this.clearDisconnectTimer();
-          ui.networkStatus.textContent = "Connected \u2014 dropping the puck";
-        } else if (state === "disconnected") {
-          ui.networkStatus.textContent = "Connection unstable \u2014 trying to recover\u2026";
-          this.clearDisconnectTimer();
-          this.disconnectTimer = window.setTimeout(() => {
-            if (connection.connectionState === "disconnected") {
-              ui.networkStatus.textContent = `Connection lost \u2014 ICE: ${connection.iceConnectionState}`;
-            }
-          }, 8e3);
-        } else if (state === "failed") {
-          this.clearDisconnectTimer();
-          ui.networkStatus.textContent = `Connection failed \u2014 ICE: ${connection.iceConnectionState}`;
-        }
-      });
-      connection.addEventListener("iceconnectionstatechange", () => {
-        if (connection.iceConnectionState === "checking") ui.networkStatus.textContent = "Checking network route\u2026";
-      });
-      this.peer = connection;
-      return connection;
-    }
-    bindChannel(channel) {
-      this.channel = channel;
-      channel.addEventListener("open", () => {
+    handleServerMessage(message) {
+      if (message.type === "created") {
+        ui.roomCode.value = message.code;
+        ui.copyCode.disabled = false;
+        ui.networkStatus.textContent = "Send this code to player 2. Waiting for connection\u2026";
+      } else if (message.type === "connected") {
         this.snapshotSequence = this.inputSequence = 0;
         this.lastReceivedSnapshot = this.lastReceivedInput = -1;
         ui.networkStatus.textContent = "Connected \u2014 dropping the puck";
         this.game.sound.ensure();
-        if (this.game.role === "host") this.game.start();
+        if (message.role === "host") this.game.start();
         else {
           this.game.resetPuck();
           this.game.setState("playing");
         }
-      });
-      channel.addEventListener("close", () => {
-        if (this.peer?.connectionState !== "closed") ui.networkStatus.textContent = "Game channel closed \u2014 create a fresh room";
-      });
-      channel.addEventListener("message", (event) => this.receive(JSON.parse(String(event.data))));
+      } else if (message.type === "relay") this.receive(message.payload);
+      else if (message.type === "peer-left") ui.networkStatus.textContent = "Other player disconnected \u2014 create a fresh room";
+      else if (message.type === "error") {
+        ui.networkStatus.textContent = message.message;
+        ui.applyCode.disabled = false;
+      }
     }
     receive(data) {
       if (data.type === "input" && this.game.role === "host") {
         if (data.seq <= this.lastReceivedInput) return;
         this.lastReceivedInput = data.seq;
         this.game.setRemoteOpponent(data.x, data.y);
-      } else if (data.type === "sound" && this.game.role === "guest") {
-        this.game.sound.play(data.kind, true);
-      } else if (data.type === "snapshot" && this.game.role === "guest") {
+      } else if (data.type === "sound" && this.game.role === "guest") this.game.sound.play(data.kind, true);
+      else if (data.type === "snapshot" && this.game.role === "guest") {
         if (data.seq <= this.lastReceivedSnapshot) return;
         this.lastReceivedSnapshot = data.seq;
         this.game.applySnapshot(data);
       }
     }
+    send(data) {
+      if (this.socket?.readyState !== WebSocket.OPEN) throw new Error("Game server is not connected");
+      this.socket.send(JSON.stringify(data));
+    }
+    relay(payload) {
+      if (this.socket?.readyState === WebSocket.OPEN) this.send({ type: "relay", payload });
+    }
     sendInput(x, y) {
       const now = performance.now();
-      if (this.channel?.readyState !== "open" || now - this.lastInputSentAt < 16) return;
-      this.channel.send(JSON.stringify({ type: "input", seq: this.inputSequence++, x, y }));
+      if (now - this.lastInputSentAt < 16) return;
+      this.relay({ type: "input", seq: this.inputSequence++, x, y });
       this.lastInputSentAt = now;
     }
     sendSnapshot(data) {
-      if (this.channel?.readyState !== "open") return;
-      this.channel.send(JSON.stringify({ type: "snapshot", seq: this.snapshotSequence++, ...data }));
+      this.relay({ type: "snapshot", seq: this.snapshotSequence++, ...data });
     }
     sendSound(kind) {
-      if (this.game.role === "host" && this.channel?.readyState === "open") {
-        this.channel.send(JSON.stringify({ type: "sound", kind }));
-      }
-    }
-    stopPolling() {
-      if (this.roomPoll !== null) window.clearInterval(this.roomPoll);
-      this.roomPoll = null;
-    }
-    clearDisconnectTimer() {
-      if (this.disconnectTimer !== null) window.clearTimeout(this.disconnectTimer);
-      this.disconnectTimer = null;
-    }
-    waitForIce(connection) {
-      if (connection.iceGatheringState === "complete") return Promise.resolve();
-      return new Promise((resolve) => {
-        let finished = false;
-        let timeout = 0;
-        const finish = () => {
-          if (finished) return;
-          finished = true;
-          window.clearTimeout(timeout);
-          connection.removeEventListener("icegatheringstatechange", check);
-          resolve();
-        };
-        const check = () => {
-          if (connection.iceGatheringState === "complete") finish();
-        };
-        connection.addEventListener("icegatheringstatechange", check);
-        timeout = window.setTimeout(finish, 8e3);
-      });
+      if (this.game.role === "host") this.relay({ type: "sound", kind });
     }
   };
 

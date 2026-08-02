@@ -3,12 +3,11 @@ import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
 import { extname, join, normalize } from "node:path";
 import { readFile, stat } from "node:fs/promises";
+import { WebSocket, WebSocketServer } from "ws";
 var host = process.env.HOST ?? "0.0.0.0";
 var port = Number(process.env.PORT ?? 5173);
 var root = process.cwd();
-var rooms = /* @__PURE__ */ new Map();
 var alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-var roomLifetime = 10 * 60 * 1e3;
 var mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -17,68 +16,37 @@ var mimeTypes = {
   ".png": "image/png",
   ".svg": "image/svg+xml"
 };
-function createRoomCode() {
+var rooms = /* @__PURE__ */ new Map();
+function send(socket, data) {
+  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data));
+}
+function createCode() {
   let code = "";
-  do {
+  do
     code = Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
-  } while (rooms.has(code));
+  while (rooms.has(code));
   return code;
 }
-async function readJson(request) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of request) {
-    const buffer = Buffer.from(chunk);
-    size += buffer.length;
-    if (size > 128e3) throw new Error("Payload too large");
-    chunks.push(buffer);
+function leave(socket) {
+  if (!socket.roomCode) return;
+  const room = rooms.get(socket.roomCode);
+  if (!room) return;
+  const peer = socket.role === "host" ? room.guest : room.host;
+  send(peer, { type: "peer-left" });
+  rooms.delete(socket.roomCode);
+  if (peer) {
+    peer.roomCode = void 0;
+    peer.role = void 0;
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
-function sendJson(response, status, data) {
-  response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
-  response.end(JSON.stringify(data));
+  socket.roomCode = void 0;
+  socket.role = void 0;
 }
 var server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
-    const now = Date.now();
-    for (const [code, room] of rooms) if (now - room.createdAt > roomLifetime) rooms.delete(code);
-    if (request.method === "POST" && url.pathname === "/api/rooms") {
-      const body = await readJson(request);
-      if (!body.offer || typeof body.offer !== "object") {
-        sendJson(response, 400, { error: "Offer required" });
-        return;
-      }
-      const code = createRoomCode();
-      rooms.set(code, { offer: body.offer, createdAt: now });
-      sendJson(response, 201, { code });
-      return;
-    }
-    const roomMatch = url.pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})$/);
-    if (request.method === "GET" && roomMatch) {
-      const room = rooms.get(roomMatch[1]);
-      if (!room) {
-        sendJson(response, 404, { error: "Room not found" });
-        return;
-      }
-      sendJson(response, 200, { offer: room.offer, answer: room.answer ?? null });
-      return;
-    }
-    const answerMatch = url.pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})\/answer$/);
-    if (request.method === "POST" && answerMatch) {
-      const room = rooms.get(answerMatch[1]);
-      if (!room) {
-        sendJson(response, 404, { error: "Room not found" });
-        return;
-      }
-      const body = await readJson(request);
-      if (!body.answer || typeof body.answer !== "object") {
-        sendJson(response, 400, { error: "Answer required" });
-        return;
-      }
-      room.answer = body.answer;
-      sendJson(response, 200, { ok: true });
+    if (url.pathname === "/health") {
+      response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      response.end(JSON.stringify({ ok: true, rooms: rooms.size }));
       return;
     }
     const requested = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname.slice(1));
@@ -88,24 +56,72 @@ var server = createServer(async (request, response) => {
       return;
     }
     const content = await readFile(filePath);
-    response.writeHead(200, {
-      "Content-Type": mimeTypes[extname(filePath)] ?? "application/octet-stream",
-      "Cache-Control": "no-store"
-    });
+    response.writeHead(200, { "Content-Type": mimeTypes[extname(filePath)] ?? "application/octet-stream", "Cache-Control": "no-store" });
     response.end(content);
   } catch {
     response.writeHead(404).end("Not found");
   }
 });
-server.listen(port, host, () => {
-  console.log(`Air Hockey is running:`);
-  console.log(`  Local:   http://localhost:${port}`);
-  for (const addresses of Object.values(networkInterfaces())) {
-    for (const address of addresses ?? []) {
-      if (address.family === "IPv4" && !address.internal) {
-        console.log(`  Network: http://${address.address}:${port}`);
+var sockets = new WebSocketServer({ server, path: "/socket", maxPayload: 256e3 });
+sockets.on("connection", (rawSocket) => {
+  const socket = rawSocket;
+  socket.alive = true;
+  socket.on("pong", () => {
+    socket.alive = true;
+  });
+  socket.on("message", (raw) => {
+    try {
+      const message = JSON.parse(raw.toString());
+      if (message.type === "create") {
+        leave(socket);
+        const code = createCode();
+        socket.roomCode = code;
+        socket.role = "host";
+        rooms.set(code, { host: socket });
+        send(socket, { type: "created", code });
+        return;
       }
+      if (message.type === "join") {
+        const code = String(message.code ?? "").trim().toUpperCase();
+        const room = rooms.get(code);
+        if (!room || room.guest || room.host.readyState !== WebSocket.OPEN) {
+          send(socket, { type: "error", message: "Room not found or already full" });
+          return;
+        }
+        leave(socket);
+        room.guest = socket;
+        socket.roomCode = code;
+        socket.role = "guest";
+        send(room.host, { type: "connected", role: "host" });
+        send(socket, { type: "connected", role: "guest" });
+        return;
+      }
+      if (message.type === "relay" && socket.roomCode) {
+        const room = rooms.get(socket.roomCode);
+        send(socket.role === "host" ? room?.guest : room?.host, { type: "relay", payload: message.payload });
+      }
+    } catch {
+      send(socket, { type: "error", message: "Invalid server message" });
     }
+  });
+  socket.on("close", () => leave(socket));
+  socket.on("error", () => leave(socket));
+});
+var heartbeat = setInterval(() => {
+  for (const rawSocket of sockets.clients) {
+    const socket = rawSocket;
+    if (socket.alive === false) {
+      socket.terminate();
+      continue;
+    }
+    socket.alive = false;
+    socket.ping();
   }
+}, 3e4);
+sockets.on("close", () => clearInterval(heartbeat));
+server.listen(port, host, () => {
+  console.log(`Air Hockey WebSocket server: http://${host}:${port}`);
+  for (const addresses of Object.values(networkInterfaces())) for (const address of addresses ?? [])
+    if (address.family === "IPv4" && !address.internal) console.log(`Network: http://${address.address}:${port}`);
 });
 //# sourceMappingURL=server.js.map

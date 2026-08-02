@@ -62,7 +62,7 @@ export class Game {
     const teamMode = value === "three";
     ui.leagueLabel.textContent = teamMode ? "TEAM LEAGUE / 02" : "NEON LEAGUE / 01";
     ui.onlineButton.disabled = teamMode;
-    ui.onlineButton.textContent = teamMode ? "Direct match · 1 VS 1 only" : "Play peer-to-peer";
+    ui.onlineButton.textContent = teamMode ? "Online match · 1 VS 1 only" : "Play online";
   }
 
   start(): void {
