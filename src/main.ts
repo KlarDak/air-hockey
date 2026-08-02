@@ -23,8 +23,8 @@ document.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach(button => bu
 document.querySelector("#start")!.addEventListener("click", () => { game.setRole("solo"); game.start(); });
 document.querySelector("#online")!.addEventListener("click", () => network.openMenu());
 document.querySelectorAll<HTMLButtonElement>("[data-role]").forEach(button => button.addEventListener("click", () => {
-  void network.chooseRole(button.dataset.role as "host" | "guest").catch(() => {
-    ui.networkStatus.textContent = "Could not create room. Restart the local server and try again";
+  void network.chooseRole(button.dataset.role as "host" | "guest").catch(error => {
+    ui.networkStatus.textContent = error instanceof Error ? error.message : "Could not start Direct Match";
     ui.applyCode.disabled = false;
   });
 }));

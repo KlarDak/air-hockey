@@ -14,6 +14,7 @@ export class NetworkManager {
   private lastReceivedSnapshot = -1;
   private lastReceivedInput = -1;
   private lastInputSentAt = 0;
+  private disconnectTimer: number | null = null;
 
   constructor(private readonly game: Game, sound: SoundSystem) {
     sound.broadcast = kind => this.sendSound(kind);
@@ -77,8 +78,8 @@ export class NetworkManager {
       });
       if (!answerResponse.ok) throw new Error("Could not join room");
       ui.networkStatus.textContent = "Room found. Connecting…";
-    } catch {
-      ui.networkStatus.textContent = "Room not found or expired. Check the code";
+    } catch (error) {
+      ui.networkStatus.textContent = error instanceof Error ? error.message : "Room not found or expired. Check the code";
       ui.applyCode.disabled = false;
     }
   }
@@ -92,6 +93,7 @@ export class NetworkManager {
 
   close(): void {
     this.stopPolling();
+    this.clearDisconnectTimer();
     this.peer?.close();
     this.peer = null;
     this.channel = null;
@@ -99,14 +101,14 @@ export class NetworkManager {
 
   private async createRoom(connection: RTCPeerConnection): Promise<void> {
     ui.networkStatus.textContent = "Creating a six-character room…";
-    this.bindChannel(connection.createDataChannel("air-hockey", { ordered: false, maxRetransmits: 0 }));
+    this.bindChannel(connection.createDataChannel("air-hockey", { ordered: true }));
     await connection.setLocalDescription(await connection.createOffer());
     await this.waitForIce(connection);
     const response = await fetch(roomApi, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ offer: connection.localDescription }),
     });
-    if (!response.ok) throw new Error("Could not create room");
+    if (!response.ok) throw new Error(`Room API returned ${response.status}: ${new URL(roomApi).pathname}`);
     const data = await response.json() as { code: string };
     ui.roomCode.value = data.code;
     ui.copyCode.disabled = false;
@@ -125,12 +127,38 @@ export class NetworkManager {
   }
 
   private createPeer(): RTCPeerConnection {
+    if (!("RTCPeerConnection" in window)) {
+      throw new Error("WebRTC is unavailable. Use HTTPS or localhost");
+    }
     this.peer?.close();
-    const connection = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    const connection = new RTCPeerConnection({
+      iceCandidatePoolSize: 4,
+      bundlePolicy: "max-bundle",
+      iceServers: [
+        { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+        { urls: "stun:stun.cloudflare.com:3478" },
+      ],
+    });
     connection.addEventListener("connectionstatechange", () => {
-      if (connection.connectionState === "failed" || connection.connectionState === "disconnected") {
-        ui.networkStatus.textContent = "Connection lost — create a fresh room to reconnect";
+      const state = connection.connectionState;
+      if (state === "connected") {
+        this.clearDisconnectTimer();
+        ui.networkStatus.textContent = "Connected — dropping the puck";
+      } else if (state === "disconnected") {
+        ui.networkStatus.textContent = "Connection unstable — trying to recover…";
+        this.clearDisconnectTimer();
+        this.disconnectTimer = window.setTimeout(() => {
+          if (connection.connectionState === "disconnected") {
+            ui.networkStatus.textContent = `Connection lost — ICE: ${connection.iceConnectionState}`;
+          }
+        }, 8000);
+      } else if (state === "failed") {
+        this.clearDisconnectTimer();
+        ui.networkStatus.textContent = `Connection failed — ICE: ${connection.iceConnectionState}`;
       }
+    });
+    connection.addEventListener("iceconnectionstatechange", () => {
+      if (connection.iceConnectionState === "checking") ui.networkStatus.textContent = "Checking network route…";
     });
     this.peer = connection;
     return connection;
@@ -145,6 +173,9 @@ export class NetworkManager {
       this.game.sound.ensure();
       if (this.game.role === "host") this.game.start();
       else { this.game.resetPuck(); this.game.setState("playing"); }
+    });
+    channel.addEventListener("close", () => {
+      if (this.peer?.connectionState !== "closed") ui.networkStatus.textContent = "Game channel closed — create a fresh room";
     });
     channel.addEventListener("message", event => this.receive(JSON.parse(String(event.data)) as PeerMessage));
   }
@@ -186,13 +217,26 @@ export class NetworkManager {
     this.roomPoll = null;
   }
 
+  private clearDisconnectTimer(): void {
+    if (this.disconnectTimer !== null) window.clearTimeout(this.disconnectTimer);
+    this.disconnectTimer = null;
+  }
+
   private waitForIce(connection: RTCPeerConnection): Promise<void> {
     if (connection.iceGatheringState === "complete") return Promise.resolve();
     return new Promise(resolve => {
-      const finish = () => { connection.removeEventListener("icegatheringstatechange", check); resolve(); };
+      let finished = false;
+      let timeout = 0;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        window.clearTimeout(timeout);
+        connection.removeEventListener("icegatheringstatechange", check);
+        resolve();
+      };
       const check = () => { if (connection.iceGatheringState === "complete") finish(); };
       connection.addEventListener("icegatheringstatechange", check);
-      window.setTimeout(finish, 4500);
+      timeout = window.setTimeout(finish, 8000);
     });
   }
 }

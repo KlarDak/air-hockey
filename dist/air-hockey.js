@@ -579,6 +579,7 @@
     lastReceivedSnapshot = -1;
     lastReceivedInput = -1;
     lastInputSentAt = 0;
+    disconnectTimer = null;
     openMenu() {
       if (this.game.mode === "three") return;
       this.close();
@@ -637,8 +638,8 @@
         });
         if (!answerResponse.ok) throw new Error("Could not join room");
         ui.networkStatus.textContent = "Room found. Connecting\u2026";
-      } catch {
-        ui.networkStatus.textContent = "Room not found or expired. Check the code";
+      } catch (error) {
+        ui.networkStatus.textContent = error instanceof Error ? error.message : "Room not found or expired. Check the code";
         ui.applyCode.disabled = false;
       }
     }
@@ -654,13 +655,14 @@
     }
     close() {
       this.stopPolling();
+      this.clearDisconnectTimer();
       this.peer?.close();
       this.peer = null;
       this.channel = null;
     }
     async createRoom(connection) {
       ui.networkStatus.textContent = "Creating a six-character room\u2026";
-      this.bindChannel(connection.createDataChannel("air-hockey", { ordered: false, maxRetransmits: 0 }));
+      this.bindChannel(connection.createDataChannel("air-hockey", { ordered: true }));
       await connection.setLocalDescription(await connection.createOffer());
       await this.waitForIce(connection);
       const response = await fetch(roomApi, {
@@ -668,7 +670,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ offer: connection.localDescription })
       });
-      if (!response.ok) throw new Error("Could not create room");
+      if (!response.ok) throw new Error(`Room API returned ${response.status}: ${new URL(roomApi).pathname}`);
       const data = await response.json();
       ui.roomCode.value = data.code;
       ui.copyCode.disabled = false;
@@ -686,12 +688,38 @@
       }, 700);
     }
     createPeer() {
+      if (!("RTCPeerConnection" in window)) {
+        throw new Error("WebRTC is unavailable. Use HTTPS or localhost");
+      }
       this.peer?.close();
-      const connection = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      const connection = new RTCPeerConnection({
+        iceCandidatePoolSize: 4,
+        bundlePolicy: "max-bundle",
+        iceServers: [
+          { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+          { urls: "stun:stun.cloudflare.com:3478" }
+        ]
+      });
       connection.addEventListener("connectionstatechange", () => {
-        if (connection.connectionState === "failed" || connection.connectionState === "disconnected") {
-          ui.networkStatus.textContent = "Connection lost \u2014 create a fresh room to reconnect";
+        const state = connection.connectionState;
+        if (state === "connected") {
+          this.clearDisconnectTimer();
+          ui.networkStatus.textContent = "Connected \u2014 dropping the puck";
+        } else if (state === "disconnected") {
+          ui.networkStatus.textContent = "Connection unstable \u2014 trying to recover\u2026";
+          this.clearDisconnectTimer();
+          this.disconnectTimer = window.setTimeout(() => {
+            if (connection.connectionState === "disconnected") {
+              ui.networkStatus.textContent = `Connection lost \u2014 ICE: ${connection.iceConnectionState}`;
+            }
+          }, 8e3);
+        } else if (state === "failed") {
+          this.clearDisconnectTimer();
+          ui.networkStatus.textContent = `Connection failed \u2014 ICE: ${connection.iceConnectionState}`;
         }
+      });
+      connection.addEventListener("iceconnectionstatechange", () => {
+        if (connection.iceConnectionState === "checking") ui.networkStatus.textContent = "Checking network route\u2026";
       });
       this.peer = connection;
       return connection;
@@ -708,6 +736,9 @@
           this.game.resetPuck();
           this.game.setState("playing");
         }
+      });
+      channel.addEventListener("close", () => {
+        if (this.peer?.connectionState !== "closed") ui.networkStatus.textContent = "Game channel closed \u2014 create a fresh room";
       });
       channel.addEventListener("message", (event) => this.receive(JSON.parse(String(event.data))));
     }
@@ -743,10 +774,19 @@
       if (this.roomPoll !== null) window.clearInterval(this.roomPoll);
       this.roomPoll = null;
     }
+    clearDisconnectTimer() {
+      if (this.disconnectTimer !== null) window.clearTimeout(this.disconnectTimer);
+      this.disconnectTimer = null;
+    }
     waitForIce(connection) {
       if (connection.iceGatheringState === "complete") return Promise.resolve();
       return new Promise((resolve) => {
+        let finished = false;
+        let timeout = 0;
         const finish = () => {
+          if (finished) return;
+          finished = true;
+          window.clearTimeout(timeout);
           connection.removeEventListener("icegatheringstatechange", check);
           resolve();
         };
@@ -754,7 +794,7 @@
           if (connection.iceGatheringState === "complete") finish();
         };
         connection.addEventListener("icegatheringstatechange", check);
-        window.setTimeout(finish, 4500);
+        timeout = window.setTimeout(finish, 8e3);
       });
     }
   };
@@ -779,8 +819,8 @@
   });
   document.querySelector("#online").addEventListener("click", () => network.openMenu());
   document.querySelectorAll("[data-role]").forEach((button) => button.addEventListener("click", () => {
-    void network.chooseRole(button.dataset.role).catch(() => {
-      ui.networkStatus.textContent = "Could not create room. Restart the local server and try again";
+    void network.chooseRole(button.dataset.role).catch((error) => {
+      ui.networkStatus.textContent = error instanceof Error ? error.message : "Could not start Direct Match";
       ui.applyCode.disabled = false;
     });
   }));
