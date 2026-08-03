@@ -8,7 +8,7 @@ Test the game here: [https://wwbt-blog.ru/sandbox/air-hockey/](https://wwbt-blog
 
 Challenge a friend without registration or accounts. One player creates a room and shares its six-character code; the second player enters the code, and both browsers join the same persistent WebSocket room on the Node.js server.
 
-The host runs the authoritative simulation. The guest sends striker input and receives synchronized puck, score, player, and sound events. All multiplayer traffic is relayed through Node.js, so the game does not depend on WebRTC, STUN, TURN, direct browser-to-browser connectivity, or NAT traversal.
+The Node.js server runs the authoritative simulation at 120 Hz. Both players send only striker input and receive identical synchronized puck, score, player, and sound events. Neither browser owns the network physics, so host and guest use the same source of truth. Multiplayer does not depend on WebRTC, STUN, TURN, direct browser-to-browser connectivity, or NAT traversal.
 
 ## Preview
 
@@ -56,7 +56,7 @@ Online multiplayer uses the classic 1 VS 1 ruleset. It is disabled while 3 VS 3 
 1. Player one selects **Create match** and copies the six-character code.
 2. Player two selects **Join match** and enters the code.
 3. Both clients keep a WebSocket connection to Node.js.
-4. The host simulates the game and the server relays input and snapshots.
+4. Node.js simulates the match at a fixed 120 Hz and sends identical snapshots to both players.
 
 Rooms live in memory and are removed when either player disconnects.
 
@@ -71,7 +71,7 @@ The TypeScript source is split into focused modules:
 - `audio.ts` — synthesized sound effects;
 - `config.ts` — board constants and device settings;
 - `game.ts` — simulation, physics, AI, rendering, and game state;
-- `network.ts` — WebSocket connection, room protocol, input, and snapshots;
+- `network.ts` — WebSocket connection, room protocol, input, and server snapshots;
 - `types.ts` — shared TypeScript types;
 - `ui.ts` — DOM element references;
 - `main.ts` — application wiring and event handlers.

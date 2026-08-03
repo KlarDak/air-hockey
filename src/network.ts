@@ -17,10 +17,8 @@ socketUrl.protocol = location.protocol === "https:" ? "wss:" : "ws:";
 
 export class NetworkManager {
   private socket: WebSocket | null = null;
-  private snapshotSequence = 0;
   private inputSequence = 0;
   private lastReceivedSnapshot = -1;
-  private lastReceivedInput = -1;
   private lastInputSentAt = 0;
   private manuallyClosed = false;
   private matchConnected = false;
@@ -31,7 +29,7 @@ export class NetworkManager {
   constructor(private readonly game: Game, sound: SoundSystem) {
     sound.broadcast = kind => this.sendSound(kind);
     game.onGuestInput = (x, y) => this.sendInput(x, y);
-    game.onHostSnapshot = snapshot => this.sendSnapshot(snapshot);
+    game.onHostInput = (x, y) => this.sendInput(x, y);
   }
   openMenu(): void {
     if (this.game.mode === "three") return;
@@ -104,10 +102,9 @@ export class NetworkManager {
       ui.networkStatus.textContent = "Send this code to player 2. Waiting for connection…";
     } else if (message.type === "connected") {
       this.matchConnected = true;
-      this.snapshotSequence = this.inputSequence = 0;
-      this.lastReceivedSnapshot = this.lastReceivedInput = -1;
+      this.inputSequence = 0; this.lastReceivedSnapshot = -1;
       ui.networkStatus.textContent = "Connected — dropping the puck"; this.game.sound.ensure();
-      if (message.role === "host") this.game.start(); else { this.game.resetPuck(); this.game.setState("playing"); }
+      this.game.startNetwork();
     } else if (message.type === "relay") this.receive(message.payload);
     else if (message.type === "pong") {
       const oneWay = Math.max(0, (performance.now() - message.sentAt) / 2);
@@ -120,12 +117,8 @@ export class NetworkManager {
     else if (message.type === "error") { ui.networkStatus.textContent = message.message; ui.applyCode.disabled = false; }
   }
   private receive(data: PeerMessage): void {
-    if (data.type === "input" && this.game.role === "host") {
-      if (data.seq <= this.lastReceivedInput) return;
-      this.lastReceivedInput = data.seq;
-      this.game.setRemoteOpponent(data.x, data.y, data.vx, data.vy, data.latency);
-    } else if (data.type === "sound" && this.game.role === "guest") this.game.sound.play(data.kind, true);
-    else if (data.type === "snapshot" && this.game.role === "guest") {
+    if (data.type === "sound") this.game.sound.play(data.kind, true);
+    else if (data.type === "snapshot") {
       if (data.seq <= this.lastReceivedSnapshot) return;
       this.lastReceivedSnapshot = data.seq; this.game.applySnapshot(data);
     }
@@ -147,8 +140,7 @@ export class NetworkManager {
     this.relay({ type: "input", seq: this.inputSequence++, x, y, vx, vy, latency: this.latency });
     this.previousInput = { x, y, at: now }; this.lastInputSentAt = now;
   }
-  private sendSnapshot(data: Omit<Snapshot, "type" | "seq">): void { this.relay({ type: "snapshot", seq: this.snapshotSequence++, ...data }); }
-  private sendSound(kind: SoundKind): void { if (this.game.role === "host") this.relay({ type: "sound", kind }); }
+  private sendSound(_kind: SoundKind): void { /* Online sounds are authoritative on the server. */ }
   private measureLatency(): void {
     if (this.socket?.readyState === WebSocket.OPEN) this.send({ type: "ping", sentAt: performance.now() });
   }

@@ -89,7 +89,7 @@
     enemyBots = [this.opponent, this.disc(W * 0.32, H * 0.36), this.disc(W * 0.68, H * 0.48)];
     puck = { x: W / 2, y: H / 2, vx: 3, vy: -7 };
     onGuestInput = null;
-    onHostSnapshot = null;
+    onHostInput = null;
     ctx = ui.canvas.getContext("2d");
     board = document.createElement("canvas");
     boardCtx = this.board.getContext("2d");
@@ -97,7 +97,6 @@
     flash = 0;
     lastTime = 0;
     lastRenderedAt = 0;
-    lastSnapshotAt = 0;
     networkTarget = null;
     networkTargetAt = 0;
     lastGuestInputAt = 0;
@@ -114,7 +113,7 @@
       ui.network.hidden = true;
       ui.setup.hidden = next !== "setup";
       ui.message.hidden = next !== "paused" && next !== "over";
-      ui.controls.hidden = next !== "playing" || this.role === "guest";
+      ui.controls.hidden = next !== "playing" || this.role !== "solo";
       ui.soloMenu.hidden = this.role !== "solo";
     }
     setRole(role) {
@@ -138,6 +137,14 @@
       ui.menu.hidden = true;
       ui.resume.hidden = false;
       ui.resume.textContent = "Back to ice";
+      this.resetPuck(false);
+      this.setState("playing");
+    }
+    startNetwork() {
+      this.score = [0, 0];
+      this.networkTarget = null;
+      this.lastGuestInputAt = performance.now();
+      this.updateScore();
       this.resetPuck(false);
       this.setState("playing");
     }
@@ -172,13 +179,6 @@
         }
       }
     }
-    setRemoteOpponent(x, y, vx = 0, vy = 0, latency = 0) {
-      const lead = Math.min(110, Math.max(0, latency) + NETWORK_FRAME_MS);
-      const speed = Math.hypot(vx, vy);
-      const scale = speed > 1.2 ? 1.2 / speed : 1;
-      this.opponent.x = clamp(x + vx * scale * lead, MALLET_R + 18, W - MALLET_R - 18);
-      this.opponent.y = clamp(y + vy * scale * lead, MALLET_R + 24, H / 2 - MALLET_R - 12);
-    }
     movePlayer(event) {
       if (this.state !== "playing") return;
       const rect = ui.canvas.getBoundingClientRect();
@@ -193,17 +193,17 @@
       } else {
         this.player.x = x;
         this.player.y = y;
+        if (this.role === "host") {
+          this.lastGuestInputAt = performance.now();
+          this.onHostInput?.(x, y);
+        }
       }
     }
     frame = (time) => {
       const dt = Math.min(1.8, (time - this.lastTime) / 16.67 || 1);
       this.lastTime = time;
-      if (this.state === "playing" && this.role !== "guest") this.update(dt);
-      if (this.role === "guest" && this.networkTarget) this.interpolateGuest(time);
-      if (this.role === "host" && time - this.lastSnapshotAt >= NETWORK_FRAME_MS) {
-        this.onHostSnapshot?.({ state: this.state, score: this.score, player: this.player, opponent: this.opponent, puck: this.puck });
-        this.lastSnapshotAt = time;
-      }
+      if (this.state === "playing" && this.role === "solo") this.update(dt);
+      if (this.role !== "solo" && this.networkTarget) this.interpolateNetwork(time);
       for (const p of this.particles) {
         p.x += p.vx * dt;
         p.y += p.vy * dt;
@@ -462,16 +462,19 @@
       if ((top || bottom) && Math.abs(this.puck.vx) < 4) this.puck.vx = this.puck.x < W / 2 ? 5 : -5;
       this.jamFrames = 0;
     }
-    interpolateGuest(time) {
+    interpolateNetwork(time) {
       const target = this.networkTarget;
       const age = Math.min(2.5, (time - this.networkTargetAt) / 16.67);
       this.puck.x += (target.puck.x + target.puck.vx * age - this.puck.x) * 0.55;
       this.puck.y += (target.puck.y + target.puck.vy * age - this.puck.y) * 0.55;
       this.puck.vx = target.puck.vx;
       this.puck.vy = target.puck.vy;
-      this.player.x += (target.player.x - this.player.x) * 0.45;
-      this.player.y += (target.player.y - this.player.y) * 0.45;
-      if (time - this.lastGuestInputAt > 180) {
+      const ownsPlayer = this.role === "host";
+      if (!ownsPlayer || time - this.lastGuestInputAt > 180) {
+        this.player.x += (target.player.x - this.player.x) * 0.45;
+        this.player.y += (target.player.y - this.player.y) * 0.45;
+      }
+      if (ownsPlayer || time - this.lastGuestInputAt > 180) {
         this.opponent.x += (target.opponent.x - this.opponent.x) * 0.2;
         this.opponent.y += (target.opponent.y - this.opponent.y) * 0.2;
       }
@@ -578,13 +581,11 @@
       this.game = game2;
       sound2.broadcast = (kind) => this.sendSound(kind);
       game2.onGuestInput = (x, y) => this.sendInput(x, y);
-      game2.onHostSnapshot = (snapshot) => this.sendSnapshot(snapshot);
+      game2.onHostInput = (x, y) => this.sendInput(x, y);
     }
     socket = null;
-    snapshotSequence = 0;
     inputSequence = 0;
     lastReceivedSnapshot = -1;
-    lastReceivedInput = -1;
     lastInputSentAt = 0;
     manuallyClosed = false;
     matchConnected = false;
@@ -703,15 +704,11 @@
         ui.networkStatus.textContent = "Send this code to player 2. Waiting for connection\u2026";
       } else if (message.type === "connected") {
         this.matchConnected = true;
-        this.snapshotSequence = this.inputSequence = 0;
-        this.lastReceivedSnapshot = this.lastReceivedInput = -1;
+        this.inputSequence = 0;
+        this.lastReceivedSnapshot = -1;
         ui.networkStatus.textContent = "Connected \u2014 dropping the puck";
         this.game.sound.ensure();
-        if (message.role === "host") this.game.start();
-        else {
-          this.game.resetPuck();
-          this.game.setState("playing");
-        }
+        this.game.startNetwork();
       } else if (message.type === "relay") this.receive(message.payload);
       else if (message.type === "pong") {
         const oneWay = Math.max(0, (performance.now() - message.sentAt) / 2);
@@ -725,12 +722,8 @@
       }
     }
     receive(data) {
-      if (data.type === "input" && this.game.role === "host") {
-        if (data.seq <= this.lastReceivedInput) return;
-        this.lastReceivedInput = data.seq;
-        this.game.setRemoteOpponent(data.x, data.y, data.vx, data.vy, data.latency);
-      } else if (data.type === "sound" && this.game.role === "guest") this.game.sound.play(data.kind, true);
-      else if (data.type === "snapshot" && this.game.role === "guest") {
+      if (data.type === "sound") this.game.sound.play(data.kind, true);
+      else if (data.type === "snapshot") {
         if (data.seq <= this.lastReceivedSnapshot) return;
         this.lastReceivedSnapshot = data.seq;
         this.game.applySnapshot(data);
@@ -755,11 +748,7 @@
       this.previousInput = { x, y, at: now };
       this.lastInputSentAt = now;
     }
-    sendSnapshot(data) {
-      this.relay({ type: "snapshot", seq: this.snapshotSequence++, ...data });
-    }
-    sendSound(kind) {
-      if (this.game.role === "host") this.relay({ type: "sound", kind });
+    sendSound(_kind) {
     }
     measureLatency() {
       if (this.socket?.readyState === WebSocket.OPEN) this.send({ type: "ping", sentAt: performance.now() });
