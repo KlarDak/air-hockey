@@ -173,9 +173,13 @@
       if (snapshot.state !== this.state) {
         this.setState(snapshot.state);
         if (snapshot.state === "over") {
-          ui.label.textContent = `FINAL SCORE / ${this.score[1]}:${this.score[0]}`;
-          ui.title.textContent = this.score[1] >= 7 ? "YOU OWN THE ICE" : "REMATCH?";
-          ui.resume.hidden = ui.menu.hidden = true;
+          const ownScore = this.role === "guest" ? this.score[1] : this.score[0];
+          const rivalScore = this.role === "guest" ? this.score[0] : this.score[1];
+          ui.label.textContent = `FINAL SCORE / ${ownScore}:${rivalScore}`;
+          ui.title.textContent = ownScore >= 7 ? "YOU OWN THE ICE" : "REMATCH?";
+          ui.resume.textContent = "Rematch";
+          ui.menu.textContent = "Main menu";
+          ui.resume.hidden = ui.menu.hidden = false;
         }
       }
     }
@@ -238,6 +242,7 @@
         ui.label.textContent = `FINAL SCORE / ${this.score[0]}:${this.score[1]}`;
         ui.title.textContent = playerScored ? "YOU OWN THE ICE" : "REMATCH?";
         ui.resume.textContent = "Play again";
+        ui.menu.textContent = "Main menu";
         ui.menu.hidden = false;
         this.setState("over");
       } else this.resetPuck(playerScored);
@@ -657,6 +662,12 @@
       ui.copyCode.textContent = "Copied";
       window.setTimeout(() => ui.copyCode.textContent = "Copy room code", 1200);
     }
+    rematch() {
+      if (!this.matchConnected) return;
+      ui.resume.disabled = true;
+      ui.networkStatus.textContent = "Starting rematch\u2026";
+      this.send({ type: "rematch" });
+    }
     close() {
       this.manuallyClosed = true;
       this.matchConnected = false;
@@ -710,7 +721,11 @@
         this.game.sound.ensure();
         this.game.startNetwork();
       } else if (message.type === "relay") this.receive(message.payload);
-      else if (message.type === "pong") {
+      else if (message.type === "rematch") {
+        ui.resume.disabled = false;
+        this.lastReceivedSnapshot = -1;
+        this.game.startNetwork();
+      } else if (message.type === "pong") {
         const oneWay = Math.max(0, (performance.now() - message.sentAt) / 2);
         this.latency = this.latency * 0.75 + Math.min(oneWay, 140) * 0.25;
       } else if (message.type === "peer-left") {
@@ -796,8 +811,12 @@
     ui.menu.hidden = true;
     game.setState("paused");
   });
-  ui.resume.addEventListener("click", () => game.state === "over" ? game.start() : game.setState("playing"));
-  ui.menu.addEventListener("click", () => game.setState("setup"));
+  ui.resume.addEventListener("click", () => {
+    if (game.state !== "over") game.setState("playing");
+    else if (game.role === "solo") game.start();
+    else network.rematch();
+  });
+  ui.menu.addEventListener("click", () => game.role === "solo" ? game.setState("setup") : network.back());
   ui.canvas.addEventListener("pointermove", (event) => game.movePlayer(event));
   ui.canvas.addEventListener("pointerdown", (event) => {
     ui.canvas.setPointerCapture(event.pointerId);

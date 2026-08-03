@@ -133,6 +133,12 @@ sockets.on("connection", rawSocket => {
         leave(socket); room.guest = socket; room.match = createMatch(); socket.roomCode = code; socket.role = "guest";
         send(room.host, { type: "connected", role: "host" }); send(socket, { type: "connected", role: "guest" }); return;
       }
+      if (message.type === "rematch" && socket.roomCode) {
+        const room = rooms.get(socket.roomCode);
+        if (!room?.guest || room.match?.state !== "over") return;
+        room.match = createMatch();
+        send(room.host, { type: "rematch" }); send(room.guest, { type: "rematch" }); return;
+      }
       if (message.type === "relay" && message.payload?.type === "input" && socket.roomCode) {
         const room = rooms.get(socket.roomCode), match = room?.match;
         const x = Number(message.payload.x), y = Number(message.payload.y);

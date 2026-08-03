@@ -7,6 +7,7 @@ import type { NetworkRole, PeerMessage, Snapshot, SoundKind } from "./types";
 type ServerMessage =
   | { type: "created"; code: string }
   | { type: "connected"; role: "host" | "guest" }
+  | { type: "rematch" }
   | { type: "relay"; payload: PeerMessage }
   | { type: "pong"; sentAt: number }
   | { type: "peer-left" }
@@ -69,6 +70,11 @@ export class NetworkManager {
     catch { ui.roomCode.select(); document.execCommand("copy"); }
     ui.copyCode.textContent = "Copied"; window.setTimeout(() => ui.copyCode.textContent = "Copy room code", 1200);
   }
+  rematch(): void {
+    if (!this.matchConnected) return;
+    ui.resume.disabled = true; ui.networkStatus.textContent = "Starting rematch…";
+    this.send({ type: "rematch" });
+  }
   close(): void {
     this.manuallyClosed = true; this.matchConnected = false; this.previousInput = null;
     if (this.pingTimer !== null) window.clearInterval(this.pingTimer);
@@ -106,6 +112,11 @@ export class NetworkManager {
       ui.networkStatus.textContent = "Connected — dropping the puck"; this.game.sound.ensure();
       this.game.startNetwork();
     } else if (message.type === "relay") this.receive(message.payload);
+    else if (message.type === "rematch") {
+      ui.resume.disabled = false;
+      this.lastReceivedSnapshot = -1;
+      this.game.startNetwork();
+    }
     else if (message.type === "pong") {
       const oneWay = Math.max(0, (performance.now() - message.sentAt) / 2);
       this.latency = this.latency * .75 + Math.min(oneWay, 140) * .25;

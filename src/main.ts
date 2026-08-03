@@ -42,8 +42,12 @@ document.querySelector("#pause")!.addEventListener("click", () => {
   ui.label.textContent = "TIME OUT"; ui.title.textContent = "Paused"; ui.resume.textContent = "Back to ice";
   ui.menu.hidden = true; game.setState("paused");
 });
-ui.resume.addEventListener("click", () => game.state === "over" ? game.start() : game.setState("playing"));
-ui.menu.addEventListener("click", () => game.setState("setup"));
+ui.resume.addEventListener("click", () => {
+  if (game.state !== "over") game.setState("playing");
+  else if (game.role === "solo") game.start();
+  else network.rematch();
+});
+ui.menu.addEventListener("click", () => game.role === "solo" ? game.setState("setup") : network.back());
 ui.canvas.addEventListener("pointermove", event => game.movePlayer(event));
 ui.canvas.addEventListener("pointerdown", event => { ui.canvas.setPointerCapture(event.pointerId); game.movePlayer(event); });
 window.addEventListener("keydown", event => {

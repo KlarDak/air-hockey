@@ -106,9 +106,13 @@ export class Game {
     if (snapshot.state !== this.state) {
       this.setState(snapshot.state);
       if (snapshot.state === "over") {
-        ui.label.textContent = `FINAL SCORE / ${this.score[1]}:${this.score[0]}`;
-        ui.title.textContent = this.score[1] >= 7 ? "YOU OWN THE ICE" : "REMATCH?";
-        ui.resume.hidden = ui.menu.hidden = true;
+        const ownScore = this.role === "guest" ? this.score[1] : this.score[0];
+        const rivalScore = this.role === "guest" ? this.score[0] : this.score[1];
+        ui.label.textContent = `FINAL SCORE / ${ownScore}:${rivalScore}`;
+        ui.title.textContent = ownScore >= 7 ? "YOU OWN THE ICE" : "REMATCH?";
+        ui.resume.textContent = "Rematch";
+        ui.menu.textContent = "Main menu";
+        ui.resume.hidden = ui.menu.hidden = false;
       }
     }
   }
@@ -168,6 +172,7 @@ export class Game {
       ui.label.textContent = `FINAL SCORE / ${this.score[0]}:${this.score[1]}`;
       ui.title.textContent = playerScored ? "YOU OWN THE ICE" : "REMATCH?";
       ui.resume.textContent = "Play again";
+      ui.menu.textContent = "Main menu";
       ui.menu.hidden = false;
       this.setState("over");
     } else this.resetPuck(playerScored);
