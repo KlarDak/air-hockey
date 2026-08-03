@@ -10,5 +10,4 @@ export type Snapshot = { type: "snapshot"; seq: number; state: GameState; score:
 export type PeerMessage =
   | Snapshot
   | { type: "input"; seq: number; x: number; y: number; vx: number; vy: number; latency: number }
-  | { type: "hit"; seq: number; puck: Puck }
   | { type: "sound"; kind: SoundKind };
