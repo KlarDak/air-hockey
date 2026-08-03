@@ -89,6 +89,7 @@
     enemyBots = [this.opponent, this.disc(W * 0.32, H * 0.36), this.disc(W * 0.68, H * 0.48)];
     puck = { x: W / 2, y: H / 2, vx: 3, vy: -7 };
     onGuestInput = null;
+    onGuestHit = null;
     onHostSnapshot = null;
     ctx = ui.canvas.getContext("2d");
     board = document.createElement("canvas");
@@ -101,6 +102,8 @@
     networkTarget = null;
     networkTargetAt = 0;
     lastGuestInputAt = 0;
+    guestPredictionUntil = 0;
+    guestHitCooldownUntil = 0;
     jamFrames = 0;
     releaseFrames = 0;
     releasedMallet = null;
@@ -179,6 +182,15 @@
       this.opponent.x = clamp(x + vx * scale * lead, MALLET_R + 18, W - MALLET_R - 18);
       this.opponent.y = clamp(y + vy * scale * lead, MALLET_R + 24, H / 2 - MALLET_R - 12);
     }
+    applyRemoteHit(puck) {
+      if (this.role !== "host") return;
+      const closeToMallet = Math.hypot(puck.x - this.opponent.x, puck.y - this.opponent.y) < PUCK_R + MALLET_R + 100;
+      const closeToPuck = Math.hypot(puck.x - this.puck.x, puck.y - this.puck.y) < 280;
+      const speed = Math.hypot(puck.vx, puck.vy);
+      if (!closeToMallet && !closeToPuck || !Number.isFinite(speed) || speed > 24) return;
+      this.puck = { x: clamp(puck.x, -PUCK_R, W + PUCK_R), y: clamp(puck.y, -PUCK_R * 2, H + PUCK_R * 2), vx: puck.vx, vy: puck.vy };
+      this.sound.play("mallet", true);
+    }
     movePlayer(event) {
       if (this.state !== "playing") return;
       const rect = ui.canvas.getBoundingClientRect();
@@ -199,7 +211,7 @@
       const dt = Math.min(1.8, (time - this.lastTime) / 16.67 || 1);
       this.lastTime = time;
       if (this.state === "playing" && this.role !== "guest") this.update(dt);
-      if (this.role === "guest" && this.networkTarget) this.interpolateGuest(time);
+      if (this.role === "guest" && this.networkTarget) this.interpolateGuest(time, dt);
       if (this.role === "host" && time - this.lastSnapshotAt >= NETWORK_FRAME_MS) {
         this.onHostSnapshot?.({ state: this.state, score: this.score, player: this.player, opponent: this.opponent, puck: this.puck });
         this.lastSnapshotAt = time;
@@ -249,7 +261,7 @@
       const contactX = mallet.px + travelX * sweep, contactY = mallet.py + travelY * sweep;
       const dx = this.puck.x - contactX, dy = this.puck.y - contactY;
       const distance = Math.hypot(dx, dy), minimum = PUCK_R + MALLET_R + networkGrace;
-      if (!distance || distance >= minimum) return;
+      if (!distance || distance >= minimum) return false;
       const nx = dx / distance, ny = dy / distance;
       this.puck.x = contactX + nx * minimum;
       this.puck.y = contactY + ny * minimum;
@@ -274,6 +286,7 @@
         this.puck.vy = this.puck.vy * 0.22 + passY / passDistance * 12.5;
       }
       this.sound.play("mallet");
+      return true;
     }
     update(dt) {
       const [tracking, maxSpeed] = this.difficulty === "rookie" ? [0.055, 5.3] : this.difficulty === "legend" ? [0.13, 9.4] : [0.085, 7.2];
@@ -462,19 +475,34 @@
       if ((top || bottom) && Math.abs(this.puck.vx) < 4) this.puck.vx = this.puck.x < W / 2 ? 5 : -5;
       this.jamFrames = 0;
     }
-    interpolateGuest(time) {
+    interpolateGuest(time, dt) {
       const target = this.networkTarget;
-      const age = Math.min(2.5, (time - this.networkTargetAt) / 16.67);
-      this.puck.x += (target.puck.x + target.puck.vx * age - this.puck.x) * 0.55;
-      this.puck.y += (target.puck.y + target.puck.vy * age - this.puck.y) * 0.55;
-      this.puck.vx = target.puck.vx;
-      this.puck.vy = target.puck.vy;
+      if (time < this.guestPredictionUntil) {
+        this.puck.x += this.puck.vx * dt;
+        this.puck.y += this.puck.vy * dt;
+        this.puck.vx *= Math.pow(0.9992, dt);
+        this.puck.vy *= Math.pow(0.9992, dt);
+        this.resolveRails();
+      } else {
+        const age = Math.min(2.5, (time - this.networkTargetAt) / 16.67);
+        this.puck.x += (target.puck.x + target.puck.vx * age - this.puck.x) * 0.55;
+        this.puck.y += (target.puck.y + target.puck.vy * age - this.puck.y) * 0.55;
+        this.puck.vx = target.puck.vx;
+        this.puck.vy = target.puck.vy;
+      }
       this.player.x += (target.player.x - this.player.x) * 0.45;
       this.player.y += (target.player.y - this.player.y) * 0.45;
       if (time - this.lastGuestInputAt > 180) {
         this.opponent.x += (target.opponent.x - this.opponent.x) * 0.2;
         this.opponent.y += (target.opponent.y - this.opponent.y) * 0.2;
       }
+      if (time >= this.guestHitCooldownUntil && this.hitMallet(this.opponent, 8)) {
+        const latency = this.onGuestHit?.({ ...this.puck }) ?? 40;
+        this.guestPredictionUntil = time + Math.min(380, Math.max(180, latency * 2 + 100));
+        this.guestHitCooldownUntil = time + 90;
+      }
+      this.opponent.px = this.opponent.x;
+      this.opponent.py = this.opponent.y;
     }
     drawMallet(mallet, color) {
       this.ctx.save();
@@ -578,11 +606,13 @@
       this.game = game2;
       sound2.broadcast = (kind) => this.sendSound(kind);
       game2.onGuestInput = (x, y) => this.sendInput(x, y);
+      game2.onGuestHit = (puck) => this.sendGuestHit(puck);
       game2.onHostSnapshot = (snapshot) => this.sendSnapshot(snapshot);
     }
     socket = null;
     snapshotSequence = 0;
     inputSequence = 0;
+    hitSequence = 0;
     lastReceivedSnapshot = -1;
     lastReceivedInput = -1;
     lastInputSentAt = 0;
@@ -703,7 +733,7 @@
         ui.networkStatus.textContent = "Send this code to player 2. Waiting for connection\u2026";
       } else if (message.type === "connected") {
         this.matchConnected = true;
-        this.snapshotSequence = this.inputSequence = 0;
+        this.snapshotSequence = this.inputSequence = this.hitSequence = 0;
         this.lastReceivedSnapshot = this.lastReceivedInput = -1;
         ui.networkStatus.textContent = "Connected \u2014 dropping the puck";
         this.game.sound.ensure();
@@ -729,6 +759,8 @@
         if (data.seq <= this.lastReceivedInput) return;
         this.lastReceivedInput = data.seq;
         this.game.setRemoteOpponent(data.x, data.y, data.vx, data.vy, data.latency);
+      } else if (data.type === "hit" && this.game.role === "host") {
+        this.game.applyRemoteHit(data.puck);
       } else if (data.type === "sound" && this.game.role === "guest") this.game.sound.play(data.kind, true);
       else if (data.type === "snapshot" && this.game.role === "guest") {
         if (data.seq <= this.lastReceivedSnapshot) return;
@@ -757,6 +789,10 @@
     }
     sendSnapshot(data) {
       this.relay({ type: "snapshot", seq: this.snapshotSequence++, ...data });
+    }
+    sendGuestHit(puck) {
+      this.relay({ type: "hit", seq: this.hitSequence++, puck: { ...puck } });
+      return this.latency;
     }
     sendSound(kind) {
       if (this.game.role === "host") this.relay({ type: "sound", kind });

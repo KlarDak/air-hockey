@@ -7,4 +7,8 @@ export type Disc = { x: number; y: number; px: number; py: number };
 export type Puck = { x: number; y: number; vx: number; vy: number };
 export type Particle = { x: number; y: number; vx: number; vy: number; life: number; color: string };
 export type Snapshot = { type: "snapshot"; seq: number; state: GameState; score: [number, number]; player: Disc; opponent: Disc; puck: Puck };
-export type PeerMessage = Snapshot | { type: "input"; seq: number; x: number; y: number; vx: number; vy: number; latency: number } | { type: "sound"; kind: SoundKind };
+export type PeerMessage =
+  | Snapshot
+  | { type: "input"; seq: number; x: number; y: number; vx: number; vy: number; latency: number }
+  | { type: "hit"; seq: number; puck: Puck }
+  | { type: "sound"; kind: SoundKind };

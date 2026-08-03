@@ -15,6 +15,7 @@ export class Game {
   enemyBots: Disc[] = [this.opponent, this.disc(W * .32, H * .36), this.disc(W * .68, H * .48)];
   puck: Puck = { x: W / 2, y: H / 2, vx: 3, vy: -7 };
   onGuestInput: ((x: number, y: number) => void) | null = null;
+  onGuestHit: ((puck: Puck) => number) | null = null;
   onHostSnapshot: ((snapshot: Omit<Snapshot, "type" | "seq">) => void) | null = null;
 
   private readonly ctx = ui.canvas.getContext("2d")!;
@@ -28,6 +29,8 @@ export class Game {
   private networkTarget: Snapshot | null = null;
   private networkTargetAt = 0;
   private lastGuestInputAt = 0;
+  private guestPredictionUntil = 0;
+  private guestHitCooldownUntil = 0;
   private jamFrames = 0;
   private releaseFrames = 0;
   private releasedMallet: Disc | null = null;
@@ -117,6 +120,16 @@ export class Game {
     this.opponent.y = clamp(y + vy * scale * lead, MALLET_R + 24, H / 2 - MALLET_R - 12);
   }
 
+  applyRemoteHit(puck: Puck): void {
+    if (this.role !== "host") return;
+    const closeToMallet = Math.hypot(puck.x - this.opponent.x, puck.y - this.opponent.y) < PUCK_R + MALLET_R + 100;
+    const closeToPuck = Math.hypot(puck.x - this.puck.x, puck.y - this.puck.y) < 280;
+    const speed = Math.hypot(puck.vx, puck.vy);
+    if ((!closeToMallet && !closeToPuck) || !Number.isFinite(speed) || speed > 24) return;
+    this.puck = { x: clamp(puck.x, -PUCK_R, W + PUCK_R), y: clamp(puck.y, -PUCK_R * 2, H + PUCK_R * 2), vx: puck.vx, vy: puck.vy };
+    this.sound.play("mallet", true);
+  }
+
   movePlayer(event: PointerEvent): void {
     if (this.state !== "playing") return;
     const rect = ui.canvas.getBoundingClientRect();
@@ -138,7 +151,7 @@ export class Game {
     const dt = Math.min(1.8, (time - this.lastTime) / 16.67 || 1);
     this.lastTime = time;
     if (this.state === "playing" && this.role !== "guest") this.update(dt);
-    if (this.role === "guest" && this.networkTarget) this.interpolateGuest(time);
+    if (this.role === "guest" && this.networkTarget) this.interpolateGuest(time, dt);
     if (this.role === "host" && time - this.lastSnapshotAt >= NETWORK_FRAME_MS) {
       this.onHostSnapshot?.({ state: this.state, score: this.score, player: this.player, opponent: this.opponent, puck: this.puck });
       this.lastSnapshotAt = time;
@@ -177,7 +190,7 @@ export class Game {
     } else this.resetPuck(playerScored);
   }
 
-  private hitMallet(mallet: Disc, networkGrace = 0): void {
+  private hitMallet(mallet: Disc, networkGrace = 0): boolean {
     const travelX = mallet.x - mallet.px, travelY = mallet.y - mallet.py;
     const travelLengthSq = travelX * travelX + travelY * travelY;
     const sweep = travelLengthSq
@@ -186,7 +199,7 @@ export class Game {
     const contactX = mallet.px + travelX * sweep, contactY = mallet.py + travelY * sweep;
     const dx = this.puck.x - contactX, dy = this.puck.y - contactY;
     const distance = Math.hypot(dx, dy), minimum = PUCK_R + MALLET_R + networkGrace;
-    if (!distance || distance >= minimum) return;
+    if (!distance || distance >= minimum) return false;
     const nx = dx / distance, ny = dy / distance;
     this.puck.x = contactX + nx * minimum;
     this.puck.y = contactY + ny * minimum;
@@ -204,6 +217,7 @@ export class Game {
       this.puck.vy = this.puck.vy * .22 + passY / passDistance * 12.5;
     }
     this.sound.play("mallet");
+    return true;
   }
 
   private update(dt: number): void {
@@ -353,18 +367,30 @@ export class Game {
     this.jamFrames = 0;
   }
 
-  private interpolateGuest(time: number): void {
+  private interpolateGuest(time: number, dt: number): void {
     const target = this.networkTarget!;
-    const age = Math.min(2.5, (time - this.networkTargetAt) / 16.67);
-    this.puck.x += (target.puck.x + target.puck.vx * age - this.puck.x) * .55;
-    this.puck.y += (target.puck.y + target.puck.vy * age - this.puck.y) * .55;
-    this.puck.vx = target.puck.vx; this.puck.vy = target.puck.vy;
+    if (time < this.guestPredictionUntil) {
+      this.puck.x += this.puck.vx * dt; this.puck.y += this.puck.vy * dt;
+      this.puck.vx *= Math.pow(.9992, dt); this.puck.vy *= Math.pow(.9992, dt);
+      this.resolveRails();
+    } else {
+      const age = Math.min(2.5, (time - this.networkTargetAt) / 16.67);
+      this.puck.x += (target.puck.x + target.puck.vx * age - this.puck.x) * .55;
+      this.puck.y += (target.puck.y + target.puck.vy * age - this.puck.y) * .55;
+      this.puck.vx = target.puck.vx; this.puck.vy = target.puck.vy;
+    }
     this.player.x += (target.player.x - this.player.x) * .45;
     this.player.y += (target.player.y - this.player.y) * .45;
     if (time - this.lastGuestInputAt > 180) {
       this.opponent.x += (target.opponent.x - this.opponent.x) * .2;
       this.opponent.y += (target.opponent.y - this.opponent.y) * .2;
     }
+    if (time >= this.guestHitCooldownUntil && this.hitMallet(this.opponent, 8)) {
+      const latency = this.onGuestHit?.({ ...this.puck }) ?? 40;
+      this.guestPredictionUntil = time + Math.min(380, Math.max(180, latency * 2 + 100));
+      this.guestHitCooldownUntil = time + 90;
+    }
+    this.opponent.px = this.opponent.x; this.opponent.py = this.opponent.y;
   }
 
   private drawMallet(mallet: Disc, color: string): void {
