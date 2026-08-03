@@ -72,6 +72,10 @@ sockets.on("connection", (rawSocket) => {
   socket.on("message", (raw) => {
     try {
       const message = JSON.parse(raw.toString());
+      if (message.type === "ping") {
+        send(socket, { type: "pong", sentAt: message.sentAt });
+        return;
+      }
       if (message.type === "create") {
         leave(socket);
         const code = createCode();

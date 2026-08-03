@@ -61,7 +61,10 @@ sockets.on("connection", rawSocket => {
   socket.on("pong", () => { socket.alive = true; });
   socket.on("message", raw => {
     try {
-      const message = JSON.parse(raw.toString()) as { type?: string; code?: string; payload?: unknown };
+      const message = JSON.parse(raw.toString()) as { type?: string; code?: string; payload?: unknown; sentAt?: number };
+      if (message.type === "ping") {
+        send(socket, { type: "pong", sentAt: message.sentAt }); return;
+      }
       if (message.type === "create") {
         leave(socket);
         const code = createCode(); socket.roomCode = code; socket.role = "host";

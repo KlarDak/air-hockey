@@ -8,6 +8,7 @@ type ServerMessage =
   | { type: "created"; code: string }
   | { type: "connected"; role: "host" | "guest" }
   | { type: "relay"; payload: PeerMessage }
+  | { type: "pong"; sentAt: number }
   | { type: "peer-left" }
   | { type: "error"; message: string };
 
@@ -23,6 +24,9 @@ export class NetworkManager {
   private lastInputSentAt = 0;
   private manuallyClosed = false;
   private matchConnected = false;
+  private latency = 35;
+  private pingTimer: number | null = null;
+  private previousInput: { x: number; y: number; at: number } | null = null;
 
   constructor(private readonly game: Game, sound: SoundSystem) {
     sound.broadcast = kind => this.sendSound(kind);
@@ -67,18 +71,29 @@ export class NetworkManager {
     catch { ui.roomCode.select(); document.execCommand("copy"); }
     ui.copyCode.textContent = "Copied"; window.setTimeout(() => ui.copyCode.textContent = "Copy room code", 1200);
   }
-  close(): void { this.manuallyClosed = true; this.matchConnected = false; this.socket?.close(); this.socket = null; }
+  close(): void {
+    this.manuallyClosed = true; this.matchConnected = false; this.previousInput = null;
+    if (this.pingTimer !== null) window.clearInterval(this.pingTimer);
+    this.pingTimer = null; this.socket?.close(); this.socket = null;
+  }
   private connect(): Promise<void> {
     this.manuallyClosed = false;
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(socketUrl);
       const timeout = window.setTimeout(() => { socket.close(); reject(new Error("Game server connection timed out")); }, 8000);
-      socket.addEventListener("open", () => { window.clearTimeout(timeout); this.socket = socket; resolve(); }, { once: true });
+      socket.addEventListener("open", () => {
+        window.clearTimeout(timeout); this.socket = socket; this.measureLatency();
+        this.pingTimer = window.setInterval(() => this.measureLatency(), 2000); resolve();
+      }, { once: true });
       socket.addEventListener("error", () => { window.clearTimeout(timeout); reject(new Error("Could not connect to game server")); }, { once: true });
       socket.addEventListener("message", event => this.handleServerMessage(JSON.parse(String(event.data)) as ServerMessage));
       socket.addEventListener("close", () => {
         const wasCurrent = this.socket === socket;
-        if (wasCurrent) this.socket = null;
+        if (wasCurrent) {
+          this.socket = null;
+          if (this.pingTimer !== null) window.clearInterval(this.pingTimer);
+          this.pingTimer = null;
+        }
         if (wasCurrent && !this.manuallyClosed && this.game.role !== "solo") ui.networkStatus.textContent = "Game server connection lost";
       });
     });
@@ -93,6 +108,10 @@ export class NetworkManager {
       ui.networkStatus.textContent = "Connected — dropping the puck"; this.game.sound.ensure();
       if (message.role === "host") this.game.start(); else { this.game.resetPuck(); this.game.setState("playing"); }
     } else if (message.type === "relay") this.receive(message.payload);
+    else if (message.type === "pong") {
+      const oneWay = Math.max(0, (performance.now() - message.sentAt) / 2);
+      this.latency = this.latency * .75 + Math.min(oneWay, 140) * .25;
+    }
     else if (message.type === "peer-left") {
       this.matchConnected = false;
       ui.networkStatus.textContent = "Other player disconnected — create a fresh room";
@@ -102,7 +121,8 @@ export class NetworkManager {
   private receive(data: PeerMessage): void {
     if (data.type === "input" && this.game.role === "host") {
       if (data.seq <= this.lastReceivedInput) return;
-      this.lastReceivedInput = data.seq; this.game.setRemoteOpponent(data.x, data.y);
+      this.lastReceivedInput = data.seq;
+      this.game.setRemoteOpponent(data.x, data.y, data.vx, data.vy, data.latency);
     } else if (data.type === "sound" && this.game.role === "guest") this.game.sound.play(data.kind, true);
     else if (data.type === "snapshot" && this.game.role === "guest") {
       if (data.seq <= this.lastReceivedSnapshot) return;
@@ -120,8 +140,15 @@ export class NetworkManager {
   }
   private sendInput(x: number, y: number): void {
     const now = performance.now(); if (now - this.lastInputSentAt < NETWORK_FRAME_MS) return;
-    this.relay({ type: "input", seq: this.inputSequence++, x, y }); this.lastInputSentAt = now;
+    const elapsed = Math.max(1, now - (this.previousInput?.at ?? now));
+    const vx = this.previousInput ? (x - this.previousInput.x) / elapsed : 0;
+    const vy = this.previousInput ? (y - this.previousInput.y) / elapsed : 0;
+    this.relay({ type: "input", seq: this.inputSequence++, x, y, vx, vy, latency: this.latency });
+    this.previousInput = { x, y, at: now }; this.lastInputSentAt = now;
   }
   private sendSnapshot(data: Omit<Snapshot, "type" | "seq">): void { this.relay({ type: "snapshot", seq: this.snapshotSequence++, ...data }); }
   private sendSound(kind: SoundKind): void { if (this.game.role === "host") this.relay({ type: "sound", kind }); }
+  private measureLatency(): void {
+    if (this.socket?.readyState === WebSocket.OPEN) this.send({ type: "ping", sentAt: performance.now() });
+  }
 }

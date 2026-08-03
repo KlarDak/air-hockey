@@ -109,9 +109,12 @@ export class Game {
     }
   }
 
-  setRemoteOpponent(x: number, y: number): void {
-    this.opponent.x = clamp(x, MALLET_R + 18, W - MALLET_R - 18);
-    this.opponent.y = clamp(y, MALLET_R + 24, H / 2 - MALLET_R - 12);
+  setRemoteOpponent(x: number, y: number, vx = 0, vy = 0, latency = 0): void {
+    const lead = Math.min(110, Math.max(0, latency) + NETWORK_FRAME_MS);
+    const speed = Math.hypot(vx, vy);
+    const scale = speed > 1.2 ? 1.2 / speed : 1;
+    this.opponent.x = clamp(x + vx * scale * lead, MALLET_R + 18, W - MALLET_R - 18);
+    this.opponent.y = clamp(y + vy * scale * lead, MALLET_R + 24, H / 2 - MALLET_R - 12);
   }
 
   movePlayer(event: PointerEvent): void {
@@ -174,7 +177,7 @@ export class Game {
     } else this.resetPuck(playerScored);
   }
 
-  private hitMallet(mallet: Disc): void {
+  private hitMallet(mallet: Disc, networkGrace = 0): void {
     const travelX = mallet.x - mallet.px, travelY = mallet.y - mallet.py;
     const travelLengthSq = travelX * travelX + travelY * travelY;
     const sweep = travelLengthSq
@@ -182,7 +185,7 @@ export class Game {
       : 1;
     const contactX = mallet.px + travelX * sweep, contactY = mallet.py + travelY * sweep;
     const dx = this.puck.x - contactX, dy = this.puck.y - contactY;
-    const distance = Math.hypot(dx, dy), minimum = PUCK_R + MALLET_R;
+    const distance = Math.hypot(dx, dy), minimum = PUCK_R + MALLET_R + networkGrace;
     if (!distance || distance >= minimum) return;
     const nx = dx / distance, ny = dy / distance;
     this.puck.x = contactX + nx * minimum;
@@ -223,7 +226,7 @@ export class Game {
     for (const mallet of activeMallets) {
       if (this.releaseFrames > 0 && this.releasedMallet === mallet) continue;
       if (mallet === this.opponent && this.aiRetreatFrames > 0) continue;
-      this.hitMallet(mallet);
+      this.hitMallet(mallet, this.role === "host" && mallet === this.opponent ? 10 : 0);
     }
     this.resolveRails();
     this.resolveJam(dt);
